@@ -1,0 +1,93 @@
+{
+  "id": "fact-bus",
+  "name": "Claw Fact Bus Plugin",
+  "description": "Integrates OpenClaw with Claw Fact Bus for fact-driven agent coordination",
+  "version": "1.0.0",
+  "contracts": {
+    "tools": [
+      "fact_bus_publish",
+      "fact_bus_query",
+      "fact_bus_claim",
+      "fact_bus_resolve",
+      "fact_bus_validate"
+    ]
+  },
+  "uiHints": {
+    "busUrl": {
+      "label": "Fact Bus URL",
+      "help": "The URL of the Claw Fact Bus server",
+      "placeholder": "http://localhost:8080"
+    },
+    "clawName": {
+      "label": "Claw Name",
+      "help": "Unique identifier for this Claw agent"
+    },
+    "clawDescription": {
+      "label": "Claw Description",
+      "help": "Description of this Claw's capabilities"
+    },
+    "capabilityOffer": {
+      "label": "Capabilities Offered",
+      "help": "List of capabilities this Claw can provide"
+    },
+    "domainInterests": {
+      "label": "Domain Interests",
+      "help": "List of domains this Claw is interested in"
+    },
+    "factTypePatterns": {
+      "label": "Fact Type Patterns",
+      "help": "Glob patterns for fact types to subscribe to (e.g., 'code.*.needed')"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "busUrl": {
+        "type": "string",
+        "default": "http://localhost:8080",
+        "description": "Fact Bus server URL"
+      },
+      "clawName": {
+        "type": "string",
+        "description": "Name identifier for this Claw"
+      },
+      "clawDescription": {
+        "type": "string",
+        "description": "Description of this Claw's purpose"
+      },
+      "capabilityOffer": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Capabilities this Claw offers"
+      },
+      "domainInterests": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Domains this Claw is interested in"
+      },
+      "factTypePatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fact type patterns to subscribe"
+      },
+      "autoReconnect": {
+        "type": "boolean",
+        "default": true,
+        "description": "Auto-reconnect WebSocket on disconnect"
+      },
+      "reconnectInterval": {
+        "type": "number",
+        "default": 5000,
+        "description": "Reconnect interval in milliseconds"
+      }
+    },
+    "required": ["busUrl"]
+  }
+}
