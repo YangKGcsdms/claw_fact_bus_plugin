@@ -102,7 +102,7 @@ export interface ClawConnectRequest {
   domain_interests?: string[];
   fact_type_patterns?: string[];
   priority_range?: [number, number];
-  modes?: string[]; // ["exclusive", "broadcast"]
+  modes?: FactMode[];
   max_concurrent_claims?: number;
 }
 
@@ -124,6 +124,7 @@ export interface ResolveRequest {
   token?: string;
   result_facts?: Array<{
     fact_type: string;
+    semantic_kind?: SemanticKind;
     payload?: Record<string, unknown>;
     domain_tags?: string[];
     need_capabilities?: string[];
@@ -198,6 +199,11 @@ export interface FactBusPluginConfig {
   factTypePatterns?: string[];
   priorityRange?: [number, number];
   modes?: FactMode[];
+  /** Filter subscription: only these semantic kinds (empty = all) */
+  semanticKinds?: SemanticKind[];
+  minEpistemicRank?: number;
+  minConfidence?: number;
+  subjectKeyPatterns?: string[];
   autoReconnect?: boolean;
   reconnectInterval?: number;
 }
@@ -215,6 +221,8 @@ export interface PublishFactParams {
   ttl_seconds?: number;
   domain_tags?: string[];
   need_capabilities?: string[];
+  /** Builds causation_chain from parent fact (depth +1) */
+  parent_fact_id?: string;
 }
 
 export interface QueryFactsToolParams {
@@ -232,12 +240,25 @@ export interface ResolveFactParams {
   fact_id: string;
   result_facts?: Array<{
     fact_type: string;
+    semantic_kind?: SemanticKind;
     payload?: Record<string, unknown>;
     domain_tags?: string[];
     need_capabilities?: string[];
     priority?: number;
     mode?: string;
   }>;
+}
+
+export interface SenseFactParams {
+  limit?: number;
+}
+
+export interface GetSchemaParams {
+  fact_type: string;
+}
+
+export interface ReleaseFactParams {
+  fact_id: string;
 }
 
 export interface ValidateFactParams {
