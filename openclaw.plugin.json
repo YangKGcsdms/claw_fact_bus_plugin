@@ -5,12 +5,14 @@
   "version": "1.0.0",
   "contracts": {
     "tools": [
+      "fact_bus_sense",
       "fact_bus_publish",
       "fact_bus_query",
       "fact_bus_claim",
       "fact_bus_release",
       "fact_bus_resolve",
-      "fact_bus_validate"
+      "fact_bus_validate",
+      "fact_bus_get_schema"
     ]
   },
   "uiHints": {
@@ -38,6 +40,22 @@
     "factTypePatterns": {
       "label": "Fact Type Patterns",
       "help": "Glob patterns for fact types to subscribe to (e.g., 'code.*.needed')"
+    },
+    "semanticKinds": {
+      "label": "Semantic kinds filter",
+      "help": "Only subscribe to these semantic kinds (empty = all)"
+    },
+    "minEpistemicRank": {
+      "label": "Min epistemic rank",
+      "help": "Minimum trust rank for facts (-3 to 2)"
+    },
+    "minConfidence": {
+      "label": "Min confidence",
+      "help": "Minimum publisher confidence 0-1"
+    },
+    "subjectKeyPatterns": {
+      "label": "Subject key patterns",
+      "help": "Glob patterns for subject_key filtering"
     }
   },
   "configSchema": {
@@ -77,6 +95,53 @@
           "type": "string"
         },
         "description": "Fact type patterns to subscribe"
+      },
+      "priorityRange": {
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 2,
+        "maxItems": 2,
+        "description": "Priority range [low, high] for WebSocket filter (0-7)"
+      },
+      "modes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["exclusive", "broadcast"]
+        },
+        "description": "Fact delivery modes to accept"
+      },
+      "semanticKinds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "observation",
+            "assertion",
+            "request",
+            "resolution",
+            "correction",
+            "signal"
+          ]
+        },
+        "description": "Semantic kinds to subscribe (empty = all)"
+      },
+      "minEpistemicRank": {
+        "type": "number",
+        "default": -3,
+        "description": "Minimum epistemic rank for subscription filter"
+      },
+      "minConfidence": {
+        "type": "number",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Minimum confidence for subscription filter"
+      },
+      "subjectKeyPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Glob patterns for subject_key"
       },
       "autoReconnect": {
         "type": "boolean",

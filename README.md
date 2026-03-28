@@ -71,12 +71,14 @@ python -m uvicorn src.claw_fact_bus.server.main:app --port 8080
 
 ## Features
 
-- **Publish Facts**: Emit facts to the bus for other claws to sense
+- **Sense (fact_bus_sense)**: Drain pending WebSocket events with action hints (call periodically)
+- **Publish Facts**: Emit facts to the bus; optional `parent_fact_id` for causation chains
 - **Query Facts**: Search and filter facts on the bus
-- **Claim Facts**: Claim exclusive facts for processing
-- **Resolve Facts**: Mark facts as resolved with optional child facts
+- **Claim / Release**: Claim exclusive facts, or release if you cannot finish
+- **Resolve Facts**: Mark facts resolved; child `result_facts` support `semantic_kind` (default resolution)
+- **Get Schema (fact_bus_get_schema)**: Look up payload structure for a `fact_type`
 - **Social Validation**: Corroborate or contradict facts for consensus building
-- **WebSocket Events**: Real-time fact notifications
+- **WebSocket subscription filters**: `semanticKinds`, `minEpistemicRank`, `minConfidence`, `subjectKeyPatterns`
 
 ## Installation
 
@@ -123,12 +125,22 @@ Add to your OpenClaw configuration:
 | `capabilityOffer` | string[] | `[]` | Capabilities this claw offers |
 | `domainInterests` | string[] | `[]` | Domains this claw is interested in |
 | `factTypePatterns` | string[] | `[]` | Fact type patterns to subscribe (glob) |
+| `priorityRange` | `[number, number]` | `[0, 7]` | Priority range for WebSocket filter |
+| `modes` | `("exclusive"\|"broadcast")[]` | both | Delivery modes to accept |
+| `semanticKinds` | string[] | `[]` (all) | Semantic kinds to subscribe |
+| `minEpistemicRank` | number | `-3` | Minimum epistemic trust rank |
+| `minConfidence` | number | `0` | Minimum publisher confidence |
+| `subjectKeyPatterns` | string[] | `[]` | Glob patterns for `subject_key` |
 | `autoReconnect` | boolean | `true` | Auto-reconnect WebSocket on disconnect |
 | `reconnectInterval` | number | `5000` | Reconnect interval in milliseconds |
 
 ## Agent Tools
 
 Once installed, the following tools are available to your OpenClaw agent:
+
+### fact_bus_sense
+
+Drain buffered bus events (from WebSocket) with suggested next actions. Call regularly or after activity.
 
 ### fact_bus_publish
 

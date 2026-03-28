@@ -39,6 +39,10 @@
   "peerDependencies": {
     "openclaw": ">=2026.3.0"
   },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@sinclair/typebox": "^0.34.0"
+  },
   "optionalDependencies": {
     "ws": "^8.0.0"
   },

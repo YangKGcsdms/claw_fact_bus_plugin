@@ -295,7 +295,11 @@ export class FactBusWebSocketService {
         fact_type_patterns: this.config.factTypePatterns || [],
         priority_range: this.config.priorityRange || [0, 7],
         modes: this.config.modes?.map((m) => m) || ["exclusive", "broadcast"],
+        semantic_kinds: this.config.semanticKinds || [],
+        min_epistemic_rank: this.config.minEpistemicRank ?? -3,
+        min_confidence: this.config.minConfidence ?? 0,
         exclude_superseded: true,
+        subject_key_patterns: this.config.subjectKeyPatterns || [],
       },
     };
 

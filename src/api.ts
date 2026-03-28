@@ -21,6 +21,9 @@ import type {
   ActivityLogEntry,
 } from "./types.js";
 
+/** Client publish body (server fills source_claw_id + token). */
+export type PublishFactInput = Omit<FactCreateRequest, "source_claw_id" | "token">;
+
 export class FactBusClient {
   private baseUrl: string;
   private clawId: string | null = null;
@@ -42,7 +45,7 @@ export class FactBusClient {
         domain_interests: request.domain_interests || [],
         fact_type_patterns: request.fact_type_patterns || [],
         priority_range: request.priority_range || [0, 7],
-        modes: request.modes || ["exclusive", "broadcast"],
+        modes: request.modes ?? ["exclusive", "broadcast"],
         max_concurrent_claims: request.max_concurrent_claims || 1,
       }),
     });
@@ -86,12 +89,12 @@ export class FactBusClient {
 
   // ============ Fact Operations ============
 
-  async publishFact(request: FactCreateRequest): Promise<ApiResponse<Fact>> {
+  async publishFact(request: PublishFactInput): Promise<ApiResponse<Fact>> {
     if (!this.clawId || !this.token) {
       return { success: false, error: "Not connected to Fact Bus" };
     }
 
-    const body: FactCreateRequest = {
+    const body: FactCreateRequest & { token: string } = {
       fact_type: request.fact_type,
       semantic_kind: request.semantic_kind || "observation",
       payload: request.payload || {},
@@ -240,6 +243,13 @@ export class FactBusClient {
     });
   }
 
+  async getSchema(factType: string): Promise<ApiResponse<Record<string, unknown>>> {
+    const path = `/schemas/${encodeURIComponent(factType)}`;
+    return this.fetchJson<Record<string, unknown>>(path, {
+      method: "GET",
+    });
+  }
+
   async healthCheck(): Promise<boolean> {
     try {
       const response = await fetch(`${this.baseUrl}/health`);
@@ -252,9 +262,11 @@ export class FactBusClient {
   getWebSocketUrl(): string {
     const url = new URL(this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    // Remove trailing slash for consistency
-    const urlStr = url.toString();
-    return urlStr.endsWith("/") ? urlStr.slice(0, -1) : urlStr;
+    let s = url.toString();
+    if (s.endsWith("/")) {
+      s = s.slice(0, -1);
+    }
+    return s;
   }
 
   // ============ Schema Registry Methods ============
@@ -265,7 +277,7 @@ export class FactBusClient {
     });
   }
 
-  async getSchema(factType: string, version?: string): Promise<ApiResponse<SchemaInfo>> {
+  async getSchemaInfo(factType: string, version?: string): Promise<ApiResponse<SchemaInfo>> {
     const query = version ? `?version=${version}` : "";
     return this.fetchJson<SchemaInfo>(`/schemas/${factType}${query}`, {
       method: "GET",
@@ -296,14 +308,16 @@ export class FactBusClient {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const errorData = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
         return {
           success: false,
           error: (errorData.error as string) || `HTTP ${response.status}`,
         };
       }
 
-      const data = await response.json() as T;
+      const data = (await response.json()) as T;
       return { success: true, data };
     } catch (error) {
       return {
