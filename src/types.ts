@@ -266,10 +266,6 @@ export interface ValidateFactParams {
   action: "corroborate" | "contradict";
 }
 
-export interface ReleaseFactParams {
-  fact_id: string;
-}
-
 // ============ Schema Registry Types ============
 
 export interface SchemaInfo {

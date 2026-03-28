@@ -64,7 +64,8 @@ describe("Fact Bus Tools Execution", () => {
         ttl_seconds: undefined,
         domain_tags: undefined,
         need_capabilities: undefined,
-        source_claw_id: "claw-123",
+        causation_chain: undefined,
+        causation_depth: undefined,
       });
       expect(result.content[0].text).toContain("fact-new-123");
     });

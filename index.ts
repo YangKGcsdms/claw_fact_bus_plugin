@@ -88,15 +88,9 @@ export default definePluginEntry({
     // Initialize client
     client = new FactBusClient(config.busUrl);
 
-    // Create tool context with wrapped logger
     const toolContext: ToolContext = {
       client,
-      logger: {
-        debug: (...args: unknown[]) => { logger.debug?.(args.map(String).join(" ")); },
-        info: (...args: unknown[]) => { logger.info?.(args.map(String).join(" ")); },
-        warn: (...args: unknown[]) => { logger.warn?.(args.map(String).join(" ")); },
-        error: (...args: unknown[]) => { logger.error?.(args.map(String).join(" ")); },
-      },
+      logger,
     };
 
     // Register all tools
@@ -115,7 +109,7 @@ export default definePluginEntry({
             return tool.execute(id, params, toolContext);
           },
         },
-      });
+      );
     }
 
     // Register lifecycle hooks
@@ -213,56 +207,8 @@ function startWebSocketService(
     },
   });
 
-  // Set up typed event handlers
-  setupWebSocketEventHandlers(wsService, logger);
-
   wsService.start();
   logger.info("WebSocket service started");
-}
-
-function setupWebSocketEventHandlers(
-  service: FactBusWebSocketService,
-  logger: ToolContext["logger"]
-): void {
-  // Handle fact_available events - new facts that match our subscription
-  service.on("fact_available", ((event: { fact?: { fact_type?: string; fact_id?: string } }) => {
-    logger.info(`New fact available: ${event.fact?.fact_type} (id: ${event.fact?.fact_id})`);
-  }) as never);
-
-  // Handle fact_claimed events
-  service.on("fact_claimed", ((event: { fact?: { fact_id?: string; claimed_by?: string | null } }) => {
-    logger.debug(`Fact claimed: ${event.fact?.fact_id} by ${event.fact?.claimed_by}`);
-  }) as never);
-
-  // Handle fact_resolved events
-  service.on("fact_resolved", ((event: { fact?: { fact_id?: string } }) => {
-    logger.info(`Fact resolved: ${event.fact?.fact_id}`);
-  }) as never);
-
-  // Handle fact_superseded events - knowledge evolution
-  service.on("fact_superseded", ((event: { fact?: { fact_id?: string; superseded_by?: string } }) => {
-    logger.info(`Fact superseded: ${event.fact?.fact_id} -> ${event.fact?.superseded_by}`);
-  }) as never);
-
-  // Handle fact_trust_changed events
-  service.on("fact_trust_changed", ((event: { fact?: { fact_id?: string }; detail?: unknown }) => {
-    logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
-  }) as never);
-
-  // Handle claw_state_changed events
-  service.on("claw_state_changed", ((event: { claw_id?: string; detail?: unknown }) => {
-    logger.info(`Claw state changed: ${event.claw_id}`, event.detail);
-  }) as never);
-
-  // Handle fact_expired events
-  service.on("fact_expired", ((event: { fact?: { fact_id?: string } }) => {
-    logger.debug(`Fact expired: ${event.fact?.fact_id}`);
-  }) as never);
-
-  // Handle fact_dead events
-  service.on("fact_dead", ((event: { fact?: { fact_id?: string } }) => {
-    logger.debug(`Fact dead: ${event.fact?.fact_id}`);
-  }) as never);
 }
 
 function stopWebSocketService(): void {
