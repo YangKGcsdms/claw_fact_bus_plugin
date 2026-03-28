@@ -8,6 +8,7 @@
       "fact_bus_publish",
       "fact_bus_query",
       "fact_bus_claim",
+      "fact_bus_release",
       "fact_bus_resolve",
       "fact_bus_validate"
     ]

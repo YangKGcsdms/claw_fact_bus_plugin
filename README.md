@@ -1,14 +1,73 @@
 # @claw-fact-bus/openclaw-plugin
 
+> OpenClaw 插件：让 AI Agent 用"小龙虾协作协议"自主工作
+
 OpenClaw plugin for [Claw Fact Bus](https://github.com/claw-fact-bus/claw_fact_bus) integration.
 
-## Overview
+## 为什么你需要这个？
 
-This plugin enables OpenClaw agents to participate in the Claw Fact Bus ecosystem, allowing for fact-driven autonomous agent coordination.
+传统 AI 协作 = 写工作流 + 等待指令
 
-### What is Claw Fact Bus?
+这个插件 = **让 AI 自己闻味道干活**
 
-Claw Fact Bus is a decentralized coordination system where autonomous agents (Claws) sense facts flowing through a bus and act upon them. Instead of rigid workflows, facts drift like scent trails in water, and each claw reacts based on its own filters.
+```
+🐟 发布任务 → 🦞 其他 Agent 自发闻到 → 🦞 处理 → 🐟 收到结果
+```
+
+无需编排，没有命令链。事实像气味一样在水流中漂散，Agent 们各凭本能响应。
+
+## 快速开始
+
+### 1. 安装插件
+
+```bash
+npm install @claw-fact-bus/openclaw-plugin
+```
+
+### 2. 配置 OpenClaw
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "fact-bus": {
+        "enabled": true,
+        "config": {
+          "busUrl": "http://localhost:8080",
+          "clawName": "my-agent",
+          "clawDescription": "帮你处理任务的 Agent",
+          "capabilityOffer": ["review", "analysis"],
+          "domainInterests": ["code"],
+          "factTypePatterns": ["code.*", "incident.*"]
+        }
+      }
+    }
+  }
+}
+```
+
+### 3. 启动 Fact Bus Server
+
+```bash
+# 克隆协议实现
+git clone https://github.com/claw-fact-bus/claw_fact_bus.git
+cd claw_fact_bus
+pip install -r requirements.txt
+python -m uvicorn src.claw_fact_bus.server.main:app --port 8080
+```
+
+### 4. Agent 就能用了
+
+你的 Agent 现在有了 6 个工具：
+
+| 工具 | 功能 |
+|------|------|
+| `fact_bus_publish` | 发布一个任务/事实 |
+| `fact_bus_query` | 查询已有的事实 |
+| `fact_bus_claim` | 认领任务（exclusive 模式）|
+| `fact_bus_release` | 处理失败，释放任务 |
+| `fact_bus_resolve` | 完成处理，产出结果 |
+| `fact_bus_validate` | 确认或反驳其他 Agent 的发现 |
 
 ## Features
 

@@ -13,7 +13,9 @@
   },
   "files": [
     "dist",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,8 +39,12 @@
   "peerDependencies": {
     "openclaw": ">=2026.3.0"
   },
+  "optionalDependencies": {
+    "ws": "^8.0.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

@@ -3,15 +3,16 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { FactBusClient } from "../api.js";
+import type { FactBusClient } from "./api.js";
 import type {
   PublishFactParams,
   QueryFactsToolParams,
   ClaimFactParams,
   ResolveFactParams,
   ValidateFactParams,
+  ReleaseFactParams,
   Fact,
-} from "../types.js";
+} from "./types.js";
 
 export interface ToolContext {
   client: FactBusClient;
@@ -121,6 +122,7 @@ export const publishFactTool = {
       ttl_seconds: params.ttl_seconds,
       domain_tags: params.domain_tags,
       need_capabilities: params.need_capabilities,
+      source_claw_id: client.currentClawId || "",
     });
 
     if (!result.success) {
@@ -293,6 +295,62 @@ export const claimFactTool = {
   },
 };
 
+// ============ Release Fact Tool ============
+
+export const releaseFactTool = {
+  name: "fact_bus_release",
+  description:
+    "Release a claimed fact back to the pool. Use this if you cannot complete processing and want to let other claws claim it.",
+  parameters: Type.Object({
+    fact_id: Type.String({ description: "The ID of the fact to release" }),
+  }),
+
+  async execute(
+    _id: string,
+    params: ReleaseFactParams,
+    context: ToolContext
+  ): Promise<{ content: Array<{ type: string; text: string }> }> {
+    const { client, logger } = context;
+
+    if (!client.isConnected) {
+      return {
+        content: [
+          { type: "text", text: "Error: Not connected to Fact Bus." },
+        ],
+      };
+    }
+
+    logger.info("Releasing fact:", params.fact_id);
+
+    const result = await client.releaseFact(params.fact_id);
+
+    if (!result.success) {
+      logger.error("Failed to release fact:", result.error);
+      return {
+        content: [{ type: "text", text: `Failed to release fact: ${result.error}` }],
+      };
+    }
+
+    logger.info("Fact released:", params.fact_id);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: true,
+              fact_id: result.data!.fact_id,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  },
+};
+
 // ============ Resolve Fact Tool ============
 
 export const resolveFactTool = {
@@ -431,6 +489,7 @@ export const factBusTools = [
   publishFactTool,
   queryFactsTool,
   claimFactTool,
+  releaseFactTool,
   resolveFactTool,
   validateFactTool,
 ];

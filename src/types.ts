@@ -245,6 +245,35 @@ export interface ValidateFactParams {
   action: "corroborate" | "contradict";
 }
 
+export interface ReleaseFactParams {
+  fact_id: string;
+}
+
+// ============ Schema Registry Types ============
+
+export interface SchemaInfo {
+  fact_type: string;
+  version: string;
+  schema: Record<string, unknown>;
+  created_at?: number;
+}
+
+export interface SchemaValidationResult {
+  valid: boolean;
+  errors: string[];
+  fact_type: string;
+  schema_version?: string;
+}
+
+// ============ Claw Activity Types ============
+
+export interface ActivityLogEntry {
+  timestamp: number;
+  action: string;
+  fact_id?: string;
+  detail?: string | Record<string, unknown>;
+}
+
 // ============ API Response Types ============
 
 export interface ApiResponse<T> {

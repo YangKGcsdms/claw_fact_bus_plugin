@@ -9,6 +9,7 @@ describe("Fact Bus Tools", () => {
       expect(toolNames).toContain("fact_bus_publish");
       expect(toolNames).toContain("fact_bus_query");
       expect(toolNames).toContain("fact_bus_claim");
+      expect(toolNames).toContain("fact_bus_release");
       expect(toolNames).toContain("fact_bus_resolve");
       expect(toolNames).toContain("fact_bus_validate");
     });
@@ -41,6 +42,14 @@ describe("Fact Bus Tools", () => {
 
     it("should have optional parameters", () => {
       expect(queryTool).toBeDefined();
+    });
+  });
+
+  describe("release tool", () => {
+    const releaseTool = factBusTools.find((t) => t.name === "fact_bus_release");
+
+    it("should require fact_id", () => {
+      expect(releaseTool).toBeDefined();
     });
   });
 

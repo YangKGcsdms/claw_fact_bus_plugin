@@ -16,6 +16,9 @@ import type {
   ResolveRequest,
   CorroborateRequest,
   ContradictRequest,
+  SchemaInfo,
+  SchemaValidationResult,
+  ActivityLogEntry,
 } from "./types.js";
 
 export class FactBusClient {
@@ -225,6 +228,12 @@ export class FactBusClient {
     });
   }
 
+  async getClawActivity(clawId: string, limit = 50): Promise<ApiResponse<{ claw_id: string; activity: ActivityLogEntry[] }>> {
+    return this.fetchJson<{ claw_id: string; activity: ActivityLogEntry[] }>(`/claws/${clawId}/activity?limit=${limit}`, {
+      method: "GET",
+    });
+  }
+
   async getStats(): Promise<ApiResponse<StatsResponse>> {
     return this.fetchJson<StatsResponse>("/stats", {
       method: "GET",
@@ -243,7 +252,32 @@ export class FactBusClient {
   getWebSocketUrl(): string {
     const url = new URL(this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    return url.toString();
+    // Remove trailing slash for consistency
+    const urlStr = url.toString();
+    return urlStr.endsWith("/") ? urlStr.slice(0, -1) : urlStr;
+  }
+
+  // ============ Schema Registry Methods ============
+
+  async listSchemas(): Promise<ApiResponse<Record<string, string[]>>> {
+    return this.fetchJson<Record<string, string[]>>("/schemas", {
+      method: "GET",
+    });
+  }
+
+  async getSchema(factType: string, version?: string): Promise<ApiResponse<SchemaInfo>> {
+    const query = version ? `?version=${version}` : "";
+    return this.fetchJson<SchemaInfo>(`/schemas/${factType}${query}`, {
+      method: "GET",
+    });
+  }
+
+  async validateSchema(factType: string, payload: Record<string, unknown>, version?: string): Promise<ApiResponse<SchemaValidationResult>> {
+    const query = version ? `?version=${version}` : "";
+    return this.fetchJson<SchemaValidationResult>(`/schemas/${factType}/validate${query}`, {
+      method: "POST",
+      body: JSON.stringify({ payload }),
+    });
   }
 
   // ============ Private Helpers ============
@@ -262,14 +296,14 @@ export class FactBusClient {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
         return {
           success: false,
-          error: errorData.error || `HTTP ${response.status}`,
+          error: (errorData.error as string) || `HTTP ${response.status}`,
         };
       }
 
-      const data = await response.json();
+      const data = await response.json() as T;
       return { success: true, data };
     } catch (error) {
       return {

@@ -3,7 +3,7 @@
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { FactBusClient } from "./src/api.js";
 import { factBusTools, type ToolContext } from "./src/tools.js";
 import { FactBusWebSocketService } from "./src/websocket.js";
@@ -13,64 +13,132 @@ import type { FactBusPluginConfig, BusEvent } from "./src/types.js";
 let client: FactBusClient | null = null;
 let wsService: FactBusWebSocketService | null = null;
 
+// Config schema with validation
+const configSchema = {
+  safeParse(value: unknown): { success: true; data: FactBusPluginConfig } | { success: false; error: { issues: { path: (string | number)[]; message: string }[] } } {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { success: false, error: { issues: [{ path: [], message: "config must be an object" }] } };
+    }
+    const cfg = value as Record<string, unknown>;
+    if (typeof cfg.busUrl !== "string" || !cfg.busUrl) {
+      return { success: false, error: { issues: [{ path: ["busUrl"], message: "busUrl is required" }] } };
+    }
+    // At this point we know busUrl exists and is a string
+    const validConfig: FactBusPluginConfig = {
+      busUrl: cfg.busUrl,
+      clawName: cfg.clawName as string | undefined,
+      clawDescription: cfg.clawDescription as string | undefined,
+      capabilityOffer: cfg.capabilityOffer as string[] | undefined,
+      domainInterests: cfg.domainInterests as string[] | undefined,
+      factTypePatterns: cfg.factTypePatterns as string[] | undefined,
+      priorityRange: cfg.priorityRange as [number, number] | undefined,
+      modes: cfg.modes as ("broadcast" | "exclusive")[] | undefined,
+      autoReconnect: cfg.autoReconnect as boolean | undefined,
+      reconnectInterval: cfg.reconnectInterval as number | undefined,
+    };
+    return { success: true, data: validConfig };
+  },
+
+  parse(value: unknown): FactBusPluginConfig {
+    const result = this.safeParse(value);
+    if (!result.success) {
+      throw new Error(result.error.issues.map(i => i.message).join(", "));
+    }
+    return result.data;
+  },
+
+  uiHints: {
+    busUrl: {
+      label: "Fact Bus URL",
+      placeholder: "http://localhost:8080",
+      help: "The URL of the Claw Fact Bus server",
+    },
+    clawName: {
+      label: "Claw Name",
+      help: "Unique identifier for this Claw agent",
+    },
+    clawDescription: {
+      label: "Claw Description",
+      help: "Description of this Claw's purpose",
+    },
+    capabilityOffer: {
+      label: "Capabilities Offered",
+      help: "List of capabilities this Claw can provide",
+    },
+    domainInterests: {
+      label: "Domain Interests",
+      help: "List of domains this Claw is interested in",
+    },
+    factTypePatterns: {
+      label: "Fact Type Patterns",
+      help: "Glob patterns for fact types to subscribe to",
+    },
+    autoReconnect: {
+      label: "Auto Reconnect",
+      help: "Automatically reconnect WebSocket on disconnect",
+    },
+    reconnectInterval: {
+      label: "Reconnect Interval (ms)",
+      help: "Interval between reconnection attempts",
+      advanced: true,
+    },
+  },
+};
+
 export default definePluginEntry({
   id: "fact-bus",
   name: "Claw Fact Bus Plugin",
-  description:
-    "Integrates OpenClaw with Claw Fact Bus for fact-driven autonomous agent coordination",
+  description: "Integrates OpenClaw with Claw Fact Bus for fact-driven autonomous agent coordination",
+  configSchema,
 
-  configSchema: Type.Object({
-    busUrl: Type.String({ default: "http://localhost:8080" }),
-    clawName: Type.Optional(Type.String()),
-    clawDescription: Type.Optional(Type.String()),
-    capabilityOffer: Type.Optional(Type.Array(Type.String())),
-    domainInterests: Type.Optional(Type.Array(Type.String())),
-    factTypePatterns: Type.Optional(Type.Array(Type.String())),
-    autoReconnect: Type.Optional(Type.Boolean({ default: true })),
-    reconnectInterval: Type.Optional(Type.Number({ default: 5000 })),
-  }),
-
-  register(api) {
-    const config = api.pluginConfig as FactBusPluginConfig;
+  register(api: OpenClawPluginApi) {
+    const config = configSchema.parse(api.pluginConfig);
     const logger = api.logger;
 
     // Initialize client
     client = new FactBusClient(config.busUrl);
 
-    // Create tool context
+    // Create tool context with wrapped logger
     const toolContext: ToolContext = {
       client,
-      logger,
+      logger: {
+        debug: (...args: unknown[]) => { logger.debug?.(args.map(String).join(" ")); },
+        info: (...args: unknown[]) => { logger.info?.(args.map(String).join(" ")); },
+        warn: (...args: unknown[]) => { logger.warn?.(args.map(String).join(" ")); },
+        error: (...args: unknown[]) => { logger.error?.(args.map(String).join(" ")); },
+      },
     };
 
     // Register all tools
     for (const tool of factBusTools) {
-      api.registerTool(
-        {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          execute: async (id, params) => {
-            // Ensure connected before tool execution
-            if (!client?.isConnected) {
-              await connectToBus(config, logger);
-            }
-            return tool.execute(id, params, toolContext);
-          },
+      api.registerTool({
+        name: tool.name,
+        description: tool.description,
+        label: tool.name,
+        parameters: tool.parameters,
+        execute: async (_id: string, params: unknown) => {
+          // Ensure connected before tool execution
+          if (!client?.isConnected) {
+            await connectToBus(config, toolContext.logger);
+          }
+          const result = await tool.execute(_id, params as never, toolContext);
+          return {
+            content: result.content as never,
+            details: {} as never,
+          };
         },
-        { optional: false }
-      );
+      });
     }
 
     // Register lifecycle hooks
     api.on("gateway_start", async () => {
-      logger.info("Gateway starting, connecting to Fact Bus...");
-      await connectToBus(config, logger);
-      startWebSocketService(config, logger);
+      toolContext.logger.info("Gateway starting, connecting to Fact Bus...");
+      await connectToBus(config, toolContext.logger);
+      startWebSocketService(config, toolContext.logger);
     });
 
     api.on("gateway_stop", () => {
-      logger.info("Gateway stopping, disconnecting from Fact Bus...");
+      toolContext.logger.info("Gateway stopping, disconnecting from Fact Bus...");
       stopWebSocketService();
       client?.disconnect();
     });
@@ -78,7 +146,6 @@ export default definePluginEntry({
     // Register background service for WebSocket
     api.registerService({
       id: "fact-bus-websocket",
-      name: "Fact Bus WebSocket Service",
       start: async () => {
         // Service is started via gateway_start hook
       },
@@ -89,16 +156,17 @@ export default definePluginEntry({
 
     // Register HTTP route for health check
     api.registerHttpRoute({
-      method: "GET",
       path: "/plugins/fact-bus/health",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (_req: unknown, res: unknown) => {
+        const response = res as { json: (data: unknown) => void };
         const health = {
           plugin: "fact-bus",
           connected: client?.isConnected ?? false,
           websocket: wsService?.isConnected ?? false,
           clawId: client?.currentClawId,
         };
-        res.json(health);
+        response.json(health);
       },
     });
   },
@@ -156,8 +224,56 @@ function startWebSocketService(
     },
   });
 
+  // Set up typed event handlers
+  setupWebSocketEventHandlers(wsService, logger);
+
   wsService.start();
   logger.info("WebSocket service started");
+}
+
+function setupWebSocketEventHandlers(
+  service: FactBusWebSocketService,
+  logger: ToolContext["logger"]
+): void {
+  // Handle fact_available events - new facts that match our subscription
+  service.on("fact_available", ((event: { fact?: { fact_type?: string; fact_id?: string } }) => {
+    logger.info(`New fact available: ${event.fact?.fact_type} (id: ${event.fact?.fact_id})`);
+  }) as never);
+
+  // Handle fact_claimed events
+  service.on("fact_claimed", ((event: { fact?: { fact_id?: string; claimed_by?: string | null } }) => {
+    logger.debug(`Fact claimed: ${event.fact?.fact_id} by ${event.fact?.claimed_by}`);
+  }) as never);
+
+  // Handle fact_resolved events
+  service.on("fact_resolved", ((event: { fact?: { fact_id?: string } }) => {
+    logger.info(`Fact resolved: ${event.fact?.fact_id}`);
+  }) as never);
+
+  // Handle fact_superseded events - knowledge evolution
+  service.on("fact_superseded", ((event: { fact?: { fact_id?: string; superseded_by?: string } }) => {
+    logger.info(`Fact superseded: ${event.fact?.fact_id} -> ${event.fact?.superseded_by}`);
+  }) as never);
+
+  // Handle fact_trust_changed events
+  service.on("fact_trust_changed", ((event: { fact?: { fact_id?: string }; detail?: unknown }) => {
+    logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
+  }) as never);
+
+  // Handle claw_state_changed events
+  service.on("claw_state_changed", ((event: { claw_id?: string; detail?: unknown }) => {
+    logger.info(`Claw state changed: ${event.claw_id}`, event.detail);
+  }) as never);
+
+  // Handle fact_expired events
+  service.on("fact_expired", ((event: { fact?: { fact_id?: string } }) => {
+    logger.debug(`Fact expired: ${event.fact?.fact_id}`);
+  }) as never);
+
+  // Handle fact_dead events
+  service.on("fact_dead", ((event: { fact?: { fact_id?: string } }) => {
+    logger.debug(`Fact dead: ${event.fact?.fact_id}`);
+  }) as never);
 }
 
 function stopWebSocketService(): void {
@@ -171,33 +287,33 @@ function handleWebSocketEvent(
   event: BusEvent,
   logger: ToolContext["logger"]
 ): void {
-  switch (event.event_type) {
+  const ev = event as unknown as { event_type: string; fact?: { fact_id?: string; fact_type?: string }; detail?: unknown };
+  switch (ev.event_type) {
     case "fact_available":
-      logger.info(`Fact available: ${event.fact?.fact_type}`);
-      // Could trigger agent processing here
+      logger.info(`Fact available: ${ev.fact?.fact_type}`);
       break;
 
     case "fact_claimed":
-      logger.debug(`Fact claimed: ${event.fact?.fact_id}`);
+      logger.debug(`Fact claimed: ${ev.fact?.fact_id}`);
       break;
 
     case "fact_resolved":
-      logger.info(`Fact resolved: ${event.fact?.fact_id}`);
+      logger.info(`Fact resolved: ${ev.fact?.fact_id}`);
       break;
 
     case "fact_superseded":
-      logger.info(`Fact superseded: ${event.fact?.fact_id}`);
+      logger.info(`Fact superseded: ${ev.fact?.fact_id}`);
       break;
 
     case "fact_trust_changed":
-      logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
+      logger.debug(`Fact trust changed: ${ev.fact?.fact_id}`, ev.detail);
       break;
 
     case "claw_state_changed":
-      logger.debug(`Claw state changed`, event.detail);
+      logger.debug(`Claw state changed`, ev.detail);
       break;
 
     default:
-      logger.debug(`WebSocket event: ${event.event_type}`);
+      logger.debug(`WebSocket event: ${ev.event_type}`);
   }
 }
