@@ -70,11 +70,27 @@ export class FactBusClient {
     });
   }
 
+  /**
+   * Clear local session and best-effort notify the bus so the claw is removed promptly.
+   * Credentials are cleared before the HTTP call so a second disconnect is a no-op.
+   */
   disconnect(): void {
+    const id = this.clawId;
+    const tok = this.token;
     this.clawId = null;
     this.token = null;
+    if (id && tok) {
+      void fetch(`${this.baseUrl}/claws/${encodeURIComponent(id)}/disconnect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: tok }),
+      })?.catch(() => {
+        /* ignore network errors */
+      });
+    }
   }
 
+  /** True when this client has registered (has claw_id + token). Not a liveness probe for HTTP or WebSocket. */
   get isConnected(): boolean {
     return this.clawId !== null;
   }

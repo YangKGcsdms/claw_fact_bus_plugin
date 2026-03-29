@@ -12,7 +12,7 @@ import type { ServerResponse } from "node:http";
 import { FactBusClient } from "./src/api.js";
 import { factBusTools, type ToolContext } from "./src/tools.js";
 import { FactBusWebSocketService } from "./src/websocket.js";
-import { pushPendingEvent } from "./src/pending-events.js";
+import { MAX_PENDING, pushPendingEvent } from "./src/pending-events.js";
 import type { FactBusPluginConfig, BusEvent } from "./src/types.js";
 
 function wrapPluginLogger(log: PluginLogger): ToolContext["logger"] {
@@ -42,6 +42,15 @@ function sendJson(res: ServerResponse, body: unknown): void {
 // Plugin-level state
 let client: FactBusClient | null = null;
 let wsService: FactBusWebSocketService | null = null;
+/** claw_id the current WebSocket subscription was opened for (if any). */
+let wsServiceClawId: string | null = null;
+
+const STARTUP_CONNECT_MAX_ATTEMPTS = 30;
+const STARTUP_CONNECT_BASE_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default definePluginEntry({
   id: "fact-bus",
@@ -106,17 +115,38 @@ export default definePluginEntry({
             if (!client?.isConnected) {
               await connectToBus(config, logger);
             }
+            ensureWebSocketAfterConnect(config, logger);
             return tool.execute(id, params, toolContext);
           },
         },
       );
     }
 
-    // Register lifecycle hooks
-    api.on("gateway_start", async () => {
-      toolContext.logger.info("Gateway starting, connecting to Fact Bus...");
-      await connectToBus(config, toolContext.logger);
-      startWebSocketService(config, toolContext.logger);
+    // Register lifecycle hooks — connect in background so gateway is not blocked if bus starts late
+    api.on("gateway_start", () => {
+      toolContext.logger.info("Gateway starting; Fact Bus connect will run in background...");
+      void (async () => {
+        for (let attempt = 1; attempt <= STARTUP_CONNECT_MAX_ATTEMPTS; attempt++) {
+          try {
+            await connectToBus(config, toolContext.logger);
+            ensureWebSocketAfterConnect(config, toolContext.logger);
+            toolContext.logger.info("Fact Bus connected and WebSocket ensured.");
+            return;
+          } catch (error) {
+            const delay = Math.min(
+              STARTUP_CONNECT_BASE_DELAY_MS * Math.pow(1.5, attempt - 1),
+              30_000
+            );
+            toolContext.logger.warn(
+              `Fact Bus connect attempt ${attempt}/${STARTUP_CONNECT_MAX_ATTEMPTS} failed; retry in ${Math.round(delay)}ms: ${error instanceof Error ? error.message : String(error)}`
+            );
+            await sleep(delay);
+          }
+        }
+        toolContext.logger.error(
+          `Fact Bus: gave up after ${STARTUP_CONNECT_MAX_ATTEMPTS} connection attempts; tools will retry on use.`
+        );
+      })();
     });
 
     api.on("gateway_stop", () => {
@@ -146,6 +176,7 @@ export default definePluginEntry({
           connected: client?.isConnected ?? false,
           websocket: wsService?.isConnected ?? false,
           clawId: client?.currentClawId,
+          websocketClawId: wsServiceClawId,
         };
         sendJson(res, health);
       },
@@ -169,34 +200,55 @@ async function connectToBus(
     return;
   }
 
-  try {
-    logger.info(`Connecting to Fact Bus at ${config.busUrl}...`);
+  logger.info(`Connecting to Fact Bus at ${config.busUrl}...`);
 
-    const response = await client.connect({
-      name: config.clawName ?? "openclaw-agent",
-      description: config.clawDescription ?? "OpenClaw Agent via Fact Bus Plugin",
-      capability_offer: config.capabilityOffer ?? [],
-      domain_interests: config.domainInterests ?? [],
-      fact_type_patterns: config.factTypePatterns ?? [],
-      priority_range: config.priorityRange ?? [0, 7],
-      modes: config.modes ?? ["exclusive", "broadcast"],
-    });
+  const response = await client.connect({
+    name: config.clawName ?? "openclaw-agent",
+    description: config.clawDescription ?? "OpenClaw Agent via Fact Bus Plugin",
+    capability_offer: config.capabilityOffer ?? [],
+    domain_interests: config.domainInterests ?? [],
+    fact_type_patterns: config.factTypePatterns ?? [],
+    priority_range: config.priorityRange ?? [0, 7],
+    modes: config.modes ?? ["exclusive", "broadcast"],
+  });
 
-    logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
-  } catch (error) {
-    logger.error("Failed to connect to Fact Bus:", error);
-    throw error;
+  logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
+}
+
+/**
+ * (Re)start WebSocket when HTTP session is new or claw_id changed, or WS is down.
+ */
+function ensureWebSocketAfterConnect(
+  config: FactBusPluginConfig,
+  logger: ToolContext["logger"]
+): void {
+  if (!client?.isConnected || !client.currentClawId) {
+    return;
   }
+  const cid = client.currentClawId;
+  // Only restart when there is no WS service or the HTTP session claw_id changed.
+  // Do not key off isConnected — the WebSocket layer handles reconnect/backoff itself.
+  const needsRestart = !wsService || wsServiceClawId !== cid;
+  if (!needsRestart) {
+    return;
+  }
+  logger.info(
+    `Fact Bus WebSocket: (re)starting for claw ${cid}${wsServiceClawId && wsServiceClawId !== cid ? ` (was ${wsServiceClawId})` : ""}`
+  );
+  stopWebSocketService();
+  startWebSocketService(config, logger);
 }
 
 function startWebSocketService(
   config: FactBusPluginConfig,
   logger: ToolContext["logger"]
 ): void {
-  if (!client || !client.isConnected) {
+  if (!client || !client.isConnected || !client.currentClawId) {
     logger.warn("Cannot start WebSocket: client not connected");
     return;
   }
+
+  wsServiceClawId = client.currentClawId;
 
   wsService = new FactBusWebSocketService({
     client,
@@ -207,7 +259,7 @@ function startWebSocketService(
     },
   });
 
-  wsService.start();
+  void wsService.start();
   logger.info("WebSocket service started");
 }
 
@@ -216,35 +268,53 @@ function stopWebSocketService(): void {
     wsService.stop();
     wsService = null;
   }
+  wsServiceClawId = null;
 }
 
 function handleWebSocketEvent(
   event: BusEvent,
   logger: ToolContext["logger"]
 ): void {
-  const ev = event as unknown as { event_type: string; fact?: { fact_id?: string; fact_type?: string }; detail?: unknown };
+  const ev = event as unknown as {
+    event_type: string;
+    fact?: { fact_id?: string; fact_type?: string };
+    detail?: unknown;
+  };
+  const onOverflow = (dropped: number) => {
+    logger.warn(
+      `Fact Bus pending queue overflow: dropped ${dropped} oldest event(s); cap=${MAX_PENDING}. Use fact_bus_query if needed.`
+    );
+  };
+
   switch (ev.event_type) {
     case "fact_available":
       logger.info(`Fact available: ${event.fact?.fact_type}`);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_claimed":
       logger.debug(`Fact claimed: ${ev.fact?.fact_id}`);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_resolved":
       logger.info(`Fact resolved: ${ev.fact?.fact_id}`);
+      pushPendingEvent(event, onOverflow);
+      break;
+
+    case "fact_dead":
+      logger.info(`Fact dead: ${ev.fact?.fact_id} ${ev.detail ?? ""}`);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_superseded":
       logger.info(`Fact superseded: ${event.fact?.fact_id}`);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_trust_changed":
       logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "claw_state_changed":
