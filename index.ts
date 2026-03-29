@@ -86,6 +86,7 @@ export default definePluginEntry({
     minEpistemicRank: Type.Optional(Type.Number({ default: -3 })),
     minConfidence: Type.Optional(Type.Number({ default: 0, minimum: 0, maximum: 1 })),
     subjectKeyPatterns: Type.Optional(Type.Array(Type.String())),
+    excludeSuperseded: Type.Optional(Type.Boolean({ default: true })),
     autoReconnect: Type.Optional(Type.Boolean({ default: true })),
     reconnectInterval: Type.Optional(Type.Number({ default: 5000 })),
   }) as unknown as OpenClawPluginConfigSchema,
@@ -210,6 +211,11 @@ async function connectToBus(
     fact_type_patterns: config.factTypePatterns ?? [],
     priority_range: config.priorityRange ?? [0, 7],
     modes: config.modes ?? ["exclusive", "broadcast"],
+    semantic_kinds: config.semanticKinds,
+    min_epistemic_rank: config.minEpistemicRank,
+    min_confidence: config.minConfidence,
+    exclude_superseded: config.excludeSuperseded ?? true,
+    subject_key_patterns: config.subjectKeyPatterns,
   });
 
   logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
@@ -319,6 +325,7 @@ function handleWebSocketEvent(
 
     case "claw_state_changed":
       logger.debug(`Claw state changed`, ev.detail);
+      pushPendingEvent(event, onOverflow);
       break;
 
     default:

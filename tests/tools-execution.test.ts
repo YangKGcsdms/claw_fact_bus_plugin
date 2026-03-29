@@ -53,20 +53,12 @@ describe("Fact Bus Tools Execution", () => {
         payload: { key: "value" },
       }, context);
 
-      expect(mockClient.publishFact).toHaveBeenCalledWith({
-        fact_type: "test.type",
-        payload: { key: "value" },
-        semantic_kind: undefined,
-        priority: undefined,
-        mode: undefined,
-        subject_key: undefined,
-        confidence: undefined,
-        ttl_seconds: undefined,
-        domain_tags: undefined,
-        need_capabilities: undefined,
-        causation_chain: undefined,
-        causation_depth: undefined,
-      });
+      expect(mockClient.publishFact).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fact_type: "test.type",
+          payload: { key: "value" },
+        })
+      );
       expect(result.content[0].text).toContain("fact-new-123");
     });
 

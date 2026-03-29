@@ -20,6 +20,7 @@ import type {
   SchemaValidationResult,
   ActivityLogEntry,
 } from "./types.js";
+import { expectedContentHash } from "./content-hash.js";
 
 /** Client publish body (server fills source_claw_id + token). */
 export type PublishFactInput = Omit<FactCreateRequest, "source_claw_id" | "token">;
@@ -47,6 +48,11 @@ export class FactBusClient {
         priority_range: request.priority_range || [0, 7],
         modes: request.modes ?? ["exclusive", "broadcast"],
         max_concurrent_claims: request.max_concurrent_claims || 1,
+        semantic_kinds: request.semantic_kinds || [],
+        min_epistemic_rank: request.min_epistemic_rank ?? -3,
+        min_confidence: request.min_confidence ?? 0,
+        exclude_superseded: request.exclude_superseded ?? true,
+        subject_key_patterns: request.subject_key_patterns || [],
       }),
     });
 
@@ -110,7 +116,32 @@ export class FactBusClient {
       return { success: false, error: "Not connected to Fact Bus" };
     }
 
-    const body: FactCreateRequest & { token: string } = {
+    const createdAt = Date.now() / 1000;
+    const causationChain = request.causation_chain || [];
+    const causationDepth = request.causation_depth ?? 0;
+    const parentFactId =
+      request.parent_fact_id ||
+      (causationChain.length > 0 ? causationChain[causationChain.length - 1] : undefined);
+
+    const contentHash = expectedContentHash({
+      fact_type: request.fact_type,
+      payload: request.payload || {},
+      source_claw_id: this.clawId,
+      created_at: createdAt,
+      mode: request.mode || "exclusive",
+      priority: request.priority ?? 3,
+      ttl_seconds: request.ttl_seconds || 300,
+      causation_depth: causationDepth,
+      parent_fact_id: parentFactId,
+      confidence:
+        request.confidence !== undefined && request.confidence !== null
+          ? request.confidence
+          : undefined,
+      domain_tags: request.domain_tags,
+      need_capabilities: request.need_capabilities,
+    });
+
+    const body: Record<string, unknown> = {
       fact_type: request.fact_type,
       semantic_kind: request.semantic_kind || "observation",
       payload: request.payload || {},
@@ -122,12 +153,19 @@ export class FactBusClient {
       token: this.token,
       ttl_seconds: request.ttl_seconds || 300,
       schema_version: request.schema_version || "1.0.0",
-      confidence: request.confidence ?? 1.0,
-      causation_chain: request.causation_chain || [],
-      causation_depth: request.causation_depth || 0,
+      causation_chain: causationChain,
+      causation_depth: causationDepth,
       subject_key: request.subject_key || "",
       supersedes: request.supersedes || "",
+      content_hash: contentHash,
+      created_at: createdAt,
     };
+    if (request.parent_fact_id) {
+      body.parent_fact_id = request.parent_fact_id;
+    }
+    if (request.confidence !== undefined && request.confidence !== null) {
+      body.confidence = request.confidence;
+    }
 
     return this.fetchJson<Fact>("/facts", {
       method: "POST",
@@ -210,12 +248,13 @@ export class FactBusClient {
   }
 
   async corroborateFact(factId: string): Promise<ApiResponse<{ success: boolean; fact_id: string; epistemic_state: string }>> {
-    if (!this.clawId) {
+    if (!this.clawId || !this.token) {
       return { success: false, error: "Not connected to Fact Bus" };
     }
 
     const body: CorroborateRequest = {
       claw_id: this.clawId,
+      token: this.token,
     };
 
     return this.fetchJson(`/facts/${factId}/corroborate`, {
@@ -225,12 +264,13 @@ export class FactBusClient {
   }
 
   async contradictFact(factId: string): Promise<ApiResponse<{ success: boolean; fact_id: string; epistemic_state: string }>> {
-    if (!this.clawId) {
+    if (!this.clawId || !this.token) {
       return { success: false, error: "Not connected to Fact Bus" };
     }
 
     const body: ContradictRequest = {
       claw_id: this.clawId,
+      token: this.token,
     };
 
     return this.fetchJson(`/facts/${factId}/contradict`, {

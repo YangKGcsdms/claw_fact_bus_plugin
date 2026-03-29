@@ -54,7 +54,8 @@ export interface Fact {
   created_at: number;
   ttl_seconds: number;
   schema_version: string;
-  confidence: number;
+  /** Absent in JSON means unspecified (not "certain"). */
+  confidence: number | null;
   content_hash: string;
   signature: string;
   protocol_version: string;
@@ -88,11 +89,14 @@ export interface FactCreateRequest {
   token?: string;
   ttl_seconds?: number; // default 300, min 10
   schema_version?: string;
-  confidence?: number; // 0-1
+  confidence?: number | null; // 0-1; omit = unspecified
   causation_chain?: string[];
   causation_depth?: number;
+  parent_fact_id?: string;
   subject_key?: string;
   supersedes?: string;
+  content_hash?: string;
+  created_at?: number;
 }
 
 export interface ClawConnectRequest {
@@ -104,6 +108,11 @@ export interface ClawConnectRequest {
   priority_range?: [number, number];
   modes?: FactMode[];
   max_concurrent_claims?: number;
+  semantic_kinds?: SemanticKind[];
+  min_epistemic_rank?: number;
+  min_confidence?: number;
+  exclude_superseded?: boolean;
+  subject_key_patterns?: string[];
 }
 
 export interface ClawResponse {
@@ -136,10 +145,12 @@ export interface ResolveRequest {
 
 export interface CorroborateRequest {
   claw_id: string;
+  token?: string;
 }
 
 export interface ContradictRequest {
   claw_id: string;
+  token?: string;
 }
 
 // ============ Query Types ============
@@ -157,7 +168,6 @@ export type BusEventType =
   | "fact_available"
   | "fact_claimed"
   | "fact_resolved"
-  | "fact_expired"
   | "fact_dead"
   | "fact_superseded"
   | "fact_trust_changed"
@@ -204,6 +214,8 @@ export interface FactBusPluginConfig {
   minEpistemicRank?: number;
   minConfidence?: number;
   subjectKeyPatterns?: string[];
+  /** When true, filter excludes superseded facts (default true). */
+  excludeSuperseded?: boolean;
   autoReconnect?: boolean;
   reconnectInterval?: number;
 }

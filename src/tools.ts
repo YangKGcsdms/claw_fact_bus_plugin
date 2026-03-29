@@ -266,7 +266,7 @@ export const publishFactTool = {
       Type.Number({
         minimum: 0,
         maximum: 1,
-        description: "Publisher's confidence in this fact 0-1 (default: 1.0)",
+        description: "Publisher's confidence 0–1; omit if unspecified",
       })
     ),
     ttl_seconds: Type.Optional(
@@ -336,6 +336,7 @@ export const publishFactTool = {
       ttl_seconds: params.ttl_seconds,
       domain_tags: params.domain_tags,
       need_capabilities: params.need_capabilities,
+      parent_fact_id: params.parent_fact_id,
       causation_chain,
       causation_depth,
     });
