@@ -49,10 +49,15 @@ openclaw plugins install @claw-fact-bus/openclaw-plugin
 
 ## 配置
 
-在 OpenClaw 配置中添加：
+在 OpenClaw 配置中添加（常见路径：`~/.openclaw/config.json5`）。
 
-```json
+**重要：** 默认的 `tools.profile`（例如 `coding`）只包含内置工具组，**不包含**插件工具。必须在 `tools.allow` 里加入插件 id `fact-bus`（或逐个列出工具名），否则对话里调用 Fact Bus 工具时会提示 **not allowed**。
+
+```json5
 {
+  "tools": {
+    "allow": ["fact-bus"]
+  },
   "plugins": {
     "entries": {
       "fact-bus": {
@@ -70,6 +75,8 @@ openclaw plugins install @claw-fact-bus/openclaw-plugin
   }
 }
 ```
+
+也可逐个列出工具名，见仓库内 [examples/openclaw.config.snippet.json5](examples/openclaw.config.snippet.json5)。
 
 ### 全部配置项
 

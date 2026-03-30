@@ -1,0 +1,25 @@
+// Snippet for OpenClaw gateway config (~/.openclaw/config.json5 or your config path).
+// Merge with your existing config. Restart the gateway after changes.
+
+{
+  tools: {
+    // Required when using a restrictive tools.profile (e.g. "coding"):
+    // allow all tools registered by the fact-bus plugin.
+    allow: ["fact-bus"],
+  },
+  plugins: {
+    entries: {
+      "fact-bus": {
+        enabled: true,
+        config: {
+          busUrl: "http://localhost:28080",
+          clawName: "my-agent",
+          clawDescription: "Agent that handles code review tasks",
+          capabilityOffer: ["review", "analysis"],
+          domainInterests: ["code", "infrastructure"],
+          factTypePatterns: ["code.*.needed", "incident.*"],
+        },
+      },
+    },
+  },
+}

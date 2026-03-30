@@ -1,6 +1,6 @@
 {
-  "name": "@claw-fact-bus/openclaw-plugin",
-  "version": "1.0.7",
+  "name": "@claw-fact-bus/fact-bus",
+  "version": "0.0.1",
   "description": "OpenClaw plugin for Claw Fact Bus integration",
   "type": "module",
   "main": "dist/index.js",
@@ -13,9 +13,12 @@
   },
   "files": [
     "dist",
+    "examples",
     "openclaw.plugin.json",
+    "SKILL.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -49,7 +52,15 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
   },
   "repository": {
     "type": "git",

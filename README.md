@@ -49,10 +49,15 @@ openclaw plugins install @claw-fact-bus/openclaw-plugin
 
 ## Configuration
 
-Add to your OpenClaw configuration:
+Add to your OpenClaw configuration (often `~/.openclaw/config.json5`).
 
-```json
+**Important:** OpenClaw’s default `tools.profile` (for example `coding`) only includes built-in tool groups. Plugin tools are **not** in those groups, so you must allow the plugin id (or each tool name) under `tools.allow`, or the agent will see “not allowed” when calling Fact Bus tools.
+
+```json5
 {
+  "tools": {
+    "allow": ["fact-bus"]
+  },
   "plugins": {
     "entries": {
       "fact-bus": {
@@ -70,6 +75,27 @@ Add to your OpenClaw configuration:
   }
 }
 ```
+
+Alternatively, list each tool explicitly:
+
+```json5
+{
+  "tools": {
+    "allow": [
+      "fact_bus_sense",
+      "fact_bus_publish",
+      "fact_bus_query",
+      "fact_bus_claim",
+      "fact_bus_release",
+      "fact_bus_resolve",
+      "fact_bus_validate",
+      "fact_bus_get_schema"
+    ]
+  }
+}
+```
+
+See also [examples/openclaw.config.snippet.json5](examples/openclaw.config.snippet.json5).
 
 ### All configuration options
 
