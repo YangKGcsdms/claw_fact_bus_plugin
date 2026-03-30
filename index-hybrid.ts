@@ -100,6 +100,7 @@ export default definePluginEntry({
     };
 
     // Register all tools
+
     for (const tool of factBusTools) {
       api.registerTool(
         {
@@ -108,14 +109,12 @@ export default definePluginEntry({
           description: tool.description,
           parameters: tool.parameters,
           execute: async (id, params) => {
-            // Ensure connected before tool execution
             if (!client?.isConnected) {
               await connectToBus(config, logger);
             }
             return tool.execute(id, params, toolContext);
           },
         },
-        { optional: false }
       );
     }
 

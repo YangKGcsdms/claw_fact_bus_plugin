@@ -114,9 +114,8 @@ export default definePluginEntry({
             }
             return tool.execute(id, params, toolContext);
           },
-        },
-        { optional: false }
-      );
+        }
+      });
     }
 
     // Register lifecycle hooks

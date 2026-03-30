@@ -75,46 +75,30 @@ describe("Plugin Entry", () => {
       const pluginModule = await import("../index.js");
       const defaultExport = pluginModule.default;
 
-      // Check that the plugin has configSchema
+      // Check that the plugin has configSchema (TypeBox schema)
       expect(defaultExport).toHaveProperty("configSchema");
-      expect(defaultExport.configSchema).toHaveProperty("safeParse");
-      expect(defaultExport.configSchema).toHaveProperty("parse");
-      expect(defaultExport.configSchema).toHaveProperty("uiHints");
+      expect(defaultExport.configSchema).toHaveProperty("type");
+      expect(defaultExport.configSchema.type).toBe("object");
     });
 
-    it("should reject config without busUrl", async () => {
+    it("should have busUrl as required field", async () => {
       const pluginModule = await import("../index.js");
       const defaultExport = pluginModule.default;
-      const { safeParse } = defaultExport.configSchema;
 
-      const result = safeParse({ clawName: "test" });
-      expect(result.success).toBe(false);
+      // TypeBox schema should have busUrl in required properties
+      expect(defaultExport.configSchema.required).toContain("busUrl");
     });
 
-    it("should reject non-object config", async () => {
+    it("should have correct config structure", async () => {
       const pluginModule = await import("../index.js");
       const defaultExport = pluginModule.default;
-      const { safeParse } = defaultExport.configSchema;
 
-      expect(safeParse(null).success).toBe(false);
-      expect(safeParse("string").success).toBe(false);
-      expect(safeParse([1, 2, 3]).success).toBe(false);
-    });
-
-    it("should parse valid config", async () => {
-      const pluginModule = await import("../index.js");
-      const defaultExport = pluginModule.default;
-      const { safeParse } = defaultExport.configSchema;
-
-      const result = safeParse({
-        busUrl: "http://localhost:8080",
-        clawName: "test-claw",
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.busUrl).toBe("http://localhost:8080");
-        expect(result.data.clawName).toBe("test-claw");
-      }
+      const props = defaultExport.configSchema.properties;
+      expect(props).toHaveProperty("busUrl");
+      expect(props).toHaveProperty("clawName");
+      expect(props).toHaveProperty("clawDescription");
+      expect(props).toHaveProperty("autoReconnect");
+      expect(props).toHaveProperty("reconnectInterval");
     });
   });
 
@@ -152,18 +136,19 @@ describe("Plugin Entry", () => {
   });
 });
 
-describe("Config UI Hints", () => {
-  it("should have uiHints for all config options", async () => {
+describe("Config Schema Properties", () => {
+  it("should have optional properties correctly defined", async () => {
     const pluginModule = await import("../index.js");
     const defaultExport = pluginModule.default;
-    const { uiHints } = defaultExport.configSchema;
 
-    expect(uiHints.busUrl).toHaveProperty("label");
-    expect(uiHints.clawName).toHaveProperty("label");
-    expect(uiHints.clawDescription).toHaveProperty("label");
-    expect(uiHints.capabilityOffer).toHaveProperty("label");
-    expect(uiHints.domainInterests).toHaveProperty("label");
-    expect(uiHints.factTypePatterns).toHaveProperty("label");
-    expect(uiHints.autoReconnect).toHaveProperty("label");
+    const props = defaultExport.configSchema.properties;
+    // Optional properties should not be in required array
+    expect(defaultExport.configSchema.required).not.toContain("clawName");
+    expect(defaultExport.configSchema.required).not.toContain("autoReconnect");
+    
+    // But should exist in properties
+    expect(props).toHaveProperty("clawName");
+    expect(props).toHaveProperty("autoReconnect");
+    expect(props).toHaveProperty("reconnectInterval");
   });
 });
