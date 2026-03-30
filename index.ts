@@ -12,7 +12,7 @@ import type { ServerResponse } from "node:http";
 import { FactBusClient } from "./src/api.js";
 import { factBusTools, type ToolContext } from "./src/tools.js";
 import { FactBusWebSocketService } from "./src/websocket.js";
-import { pushPendingEvent } from "./src/pending-events.js";
+import { MAX_PENDING, pushPendingEvent } from "./src/pending-events.js";
 import type { FactBusPluginConfig, BusEvent } from "./src/types.js";
 
 function wrapPluginLogger(log: PluginLogger): ToolContext["logger"] {
@@ -42,6 +42,15 @@ function sendJson(res: ServerResponse, body: unknown): void {
 // Plugin-level state
 let client: FactBusClient | null = null;
 let wsService: FactBusWebSocketService | null = null;
+/** claw_id the current WebSocket subscription was opened for (if any). */
+let wsServiceClawId: string | null = null;
+
+const STARTUP_CONNECT_MAX_ATTEMPTS = 30;
+const STARTUP_CONNECT_BASE_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default definePluginEntry({
   id: "fact-bus",
@@ -77,6 +86,7 @@ export default definePluginEntry({
     minEpistemicRank: Type.Optional(Type.Number({ default: -3 })),
     minConfidence: Type.Optional(Type.Number({ default: 0, minimum: 0, maximum: 1 })),
     subjectKeyPatterns: Type.Optional(Type.Array(Type.String())),
+    excludeSuperseded: Type.Optional(Type.Boolean({ default: true })),
     autoReconnect: Type.Optional(Type.Boolean({ default: true })),
     reconnectInterval: Type.Optional(Type.Number({ default: 5000 })),
   }) as unknown as OpenClawPluginConfigSchema,
@@ -88,15 +98,9 @@ export default definePluginEntry({
     // Initialize client
     client = new FactBusClient(config.busUrl);
 
-    // Create tool context with wrapped logger
     const toolContext: ToolContext = {
       client,
-      logger: {
-        debug: (...args: unknown[]) => { logger.debug?.(args.map(String).join(" ")); },
-        info: (...args: unknown[]) => { logger.info?.(args.map(String).join(" ")); },
-        warn: (...args: unknown[]) => { logger.warn?.(args.map(String).join(" ")); },
-        error: (...args: unknown[]) => { logger.error?.(args.map(String).join(" ")); },
-      },
+      logger,
     };
 
     // Register all tools
@@ -112,18 +116,38 @@ export default definePluginEntry({
             if (!client?.isConnected) {
               await connectToBus(config, logger);
             }
+            ensureWebSocketAfterConnect(config, logger);
             return tool.execute(id, params, toolContext);
           },
         },
-        { optional: false }
       );
     }
 
-    // Register lifecycle hooks
-    api.on("gateway_start", async () => {
-      toolContext.logger.info("Gateway starting, connecting to Fact Bus...");
-      await connectToBus(config, toolContext.logger);
-      startWebSocketService(config, toolContext.logger);
+    // Register lifecycle hooks — connect in background so gateway is not blocked if bus starts late
+    api.on("gateway_start", () => {
+      toolContext.logger.info("Gateway starting; Fact Bus connect will run in background...");
+      void (async () => {
+        for (let attempt = 1; attempt <= STARTUP_CONNECT_MAX_ATTEMPTS; attempt++) {
+          try {
+            await connectToBus(config, toolContext.logger);
+            ensureWebSocketAfterConnect(config, toolContext.logger);
+            toolContext.logger.info("Fact Bus connected and WebSocket ensured.");
+            return;
+          } catch (error) {
+            const delay = Math.min(
+              STARTUP_CONNECT_BASE_DELAY_MS * Math.pow(1.5, attempt - 1),
+              30_000
+            );
+            toolContext.logger.warn(
+              `Fact Bus connect attempt ${attempt}/${STARTUP_CONNECT_MAX_ATTEMPTS} failed; retry in ${Math.round(delay)}ms: ${error instanceof Error ? error.message : String(error)}`
+            );
+            await sleep(delay);
+          }
+        }
+        toolContext.logger.error(
+          `Fact Bus: gave up after ${STARTUP_CONNECT_MAX_ATTEMPTS} connection attempts; tools will retry on use.`
+        );
+      })();
     });
 
     api.on("gateway_stop", () => {
@@ -153,6 +177,7 @@ export default definePluginEntry({
           connected: client?.isConnected ?? false,
           websocket: wsService?.isConnected ?? false,
           clawId: client?.currentClawId,
+          websocketClawId: wsServiceClawId,
         };
         sendJson(res, health);
       },
@@ -176,34 +201,60 @@ async function connectToBus(
     return;
   }
 
-  try {
-    logger.info(`Connecting to Fact Bus at ${config.busUrl}...`);
+  logger.info(`Connecting to Fact Bus at ${config.busUrl}...`);
 
-    const response = await client.connect({
-      name: config.clawName ?? "openclaw-agent",
-      description: config.clawDescription ?? "OpenClaw Agent via Fact Bus Plugin",
-      capability_offer: config.capabilityOffer ?? [],
-      domain_interests: config.domainInterests ?? [],
-      fact_type_patterns: config.factTypePatterns ?? [],
-      priority_range: config.priorityRange ?? [0, 7],
-      modes: config.modes ?? ["exclusive", "broadcast"],
-    });
+  const response = await client.connect({
+    name: config.clawName ?? "openclaw-agent",
+    description: config.clawDescription ?? "OpenClaw Agent via Fact Bus Plugin",
+    capability_offer: config.capabilityOffer ?? [],
+    domain_interests: config.domainInterests ?? [],
+    fact_type_patterns: config.factTypePatterns ?? [],
+    priority_range: config.priorityRange ?? [0, 7],
+    modes: config.modes ?? ["exclusive", "broadcast"],
+    semantic_kinds: config.semanticKinds,
+    min_epistemic_rank: config.minEpistemicRank,
+    min_confidence: config.minConfidence,
+    exclude_superseded: config.excludeSuperseded ?? true,
+    subject_key_patterns: config.subjectKeyPatterns,
+  });
 
-    logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
-  } catch (error) {
-    logger.error("Failed to connect to Fact Bus:", error);
-    throw error;
+  logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
+}
+
+/**
+ * (Re)start WebSocket when HTTP session is new or claw_id changed, or WS is down.
+ */
+function ensureWebSocketAfterConnect(
+  config: FactBusPluginConfig,
+  logger: ToolContext["logger"]
+): void {
+  if (!client?.isConnected || !client.currentClawId) {
+    return;
   }
+  const cid = client.currentClawId;
+  // Only restart when there is no WS service or the HTTP session claw_id changed.
+  // Do not key off isConnected — the WebSocket layer handles reconnect/backoff itself.
+  const needsRestart = !wsService || wsServiceClawId !== cid;
+  if (!needsRestart) {
+    return;
+  }
+  logger.info(
+    `Fact Bus WebSocket: (re)starting for claw ${cid}${wsServiceClawId && wsServiceClawId !== cid ? ` (was ${wsServiceClawId})` : ""}`
+  );
+  stopWebSocketService();
+  startWebSocketService(config, logger);
 }
 
 function startWebSocketService(
   config: FactBusPluginConfig,
   logger: ToolContext["logger"]
 ): void {
-  if (!client || !client.isConnected) {
+  if (!client || !client.isConnected || !client.currentClawId) {
     logger.warn("Cannot start WebSocket: client not connected");
     return;
   }
+
+  wsServiceClawId = client.currentClawId;
 
   wsService = new FactBusWebSocketService({
     client,
@@ -214,56 +265,8 @@ function startWebSocketService(
     },
   });
 
-  // Set up typed event handlers
-  setupWebSocketEventHandlers(wsService, logger);
-
-  wsService.start();
+  void wsService.start();
   logger.info("WebSocket service started");
-}
-
-function setupWebSocketEventHandlers(
-  service: FactBusWebSocketService,
-  logger: ToolContext["logger"]
-): void {
-  // Handle fact_available events - new facts that match our subscription
-  service.on("fact_available", ((event: { fact?: { fact_type?: string; fact_id?: string } }) => {
-    logger.info(`New fact available: ${event.fact?.fact_type} (id: ${event.fact?.fact_id})`);
-  }) as never);
-
-  // Handle fact_claimed events
-  service.on("fact_claimed", ((event: { fact?: { fact_id?: string; claimed_by?: string | null } }) => {
-    logger.debug(`Fact claimed: ${event.fact?.fact_id} by ${event.fact?.claimed_by}`);
-  }) as never);
-
-  // Handle fact_resolved events
-  service.on("fact_resolved", ((event: { fact?: { fact_id?: string } }) => {
-    logger.info(`Fact resolved: ${event.fact?.fact_id}`);
-  }) as never);
-
-  // Handle fact_superseded events - knowledge evolution
-  service.on("fact_superseded", ((event: { fact?: { fact_id?: string; superseded_by?: string } }) => {
-    logger.info(`Fact superseded: ${event.fact?.fact_id} -> ${event.fact?.superseded_by}`);
-  }) as never);
-
-  // Handle fact_trust_changed events
-  service.on("fact_trust_changed", ((event: { fact?: { fact_id?: string }; detail?: unknown }) => {
-    logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
-  }) as never);
-
-  // Handle claw_state_changed events
-  service.on("claw_state_changed", ((event: { claw_id?: string; detail?: unknown }) => {
-    logger.info(`Claw state changed: ${event.claw_id}`, event.detail);
-  }) as never);
-
-  // Handle fact_expired events
-  service.on("fact_expired", ((event: { fact?: { fact_id?: string } }) => {
-    logger.debug(`Fact expired: ${event.fact?.fact_id}`);
-  }) as never);
-
-  // Handle fact_dead events
-  service.on("fact_dead", ((event: { fact?: { fact_id?: string } }) => {
-    logger.debug(`Fact dead: ${event.fact?.fact_id}`);
-  }) as never);
 }
 
 function stopWebSocketService(): void {
@@ -271,39 +274,58 @@ function stopWebSocketService(): void {
     wsService.stop();
     wsService = null;
   }
+  wsServiceClawId = null;
 }
 
 function handleWebSocketEvent(
   event: BusEvent,
   logger: ToolContext["logger"]
 ): void {
-  const ev = event as unknown as { event_type: string; fact?: { fact_id?: string; fact_type?: string }; detail?: unknown };
+  const ev = event as unknown as {
+    event_type: string;
+    fact?: { fact_id?: string; fact_type?: string };
+    detail?: unknown;
+  };
+  const onOverflow = (dropped: number) => {
+    logger.warn(
+      `Fact Bus pending queue overflow: dropped ${dropped} oldest event(s); cap=${MAX_PENDING}. Use fact_bus_query if needed.`
+    );
+  };
+
   switch (ev.event_type) {
     case "fact_available":
       logger.info(`Fact available: ${event.fact?.fact_type}`);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_claimed":
       logger.debug(`Fact claimed: ${ev.fact?.fact_id}`);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_resolved":
       logger.info(`Fact resolved: ${ev.fact?.fact_id}`);
+      pushPendingEvent(event, onOverflow);
+      break;
+
+    case "fact_dead":
+      logger.info(`Fact dead: ${ev.fact?.fact_id} ${ev.detail ?? ""}`);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_superseded":
       logger.info(`Fact superseded: ${event.fact?.fact_id}`);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "fact_trust_changed":
       logger.debug(`Fact trust changed: ${event.fact?.fact_id}`, event.detail);
-      pushPendingEvent(event);
+      pushPendingEvent(event, onOverflow);
       break;
 
     case "claw_state_changed":
       logger.debug(`Claw state changed`, ev.detail);
+      pushPendingEvent(event, onOverflow);
       break;
 
     default:

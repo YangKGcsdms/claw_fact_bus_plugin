@@ -298,7 +298,7 @@ export class FactBusWebSocketService {
         semantic_kinds: this.config.semanticKinds || [],
         min_epistemic_rank: this.config.minEpistemicRank ?? -3,
         min_confidence: this.config.minConfidence ?? 0,
-        exclude_superseded: true,
+        exclude_superseded: this.config.excludeSuperseded ?? true,
         subject_key_patterns: this.config.subjectKeyPatterns || [],
       },
     };

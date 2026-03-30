@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { describe, it, expect, vi } from "vitest";
+import { Value } from "@sinclair/typebox/value";
+import manifest from "../openclaw.plugin.json";
 
 // Mock the openclaw module
 vi.mock("openclaw/plugin-sdk/plugin-entry", () => ({
@@ -28,7 +29,9 @@ vi.mock("../src/websocket.js", () => ({
   FactBusWebSocketService: vi.fn().mockImplementation(() => ({
     start: vi.fn(),
     stop: vi.fn(),
-    get isConnected() { return false; },
+    get isConnected() {
+      return false;
+    },
     on: vi.fn(() => () => {}),
     onAll: vi.fn(() => () => {}),
     stats: { connectionAttempts: 0, lastConnectedAt: null, isConnected: false },
@@ -37,41 +40,8 @@ vi.mock("../src/websocket.js", () => ({
 }));
 
 describe("Plugin Entry", () => {
-  let mockApi: Partial<OpenClawPluginApi>;
-  let pluginConfig: { pluginConfig: unknown };
-
-  beforeEach(() => {
-    pluginConfig = {
-      pluginConfig: {
-        busUrl: "http://localhost:8080",
-        clawName: "test-claw",
-        clawDescription: "Test claw for unit testing",
-        capabilityOffer: ["review", "analysis"],
-        domainInterests: ["code", "infrastructure"],
-        factTypePatterns: ["code.*", "incident.*"],
-        autoReconnect: true,
-        reconnectInterval: 5000,
-      },
-    };
-
-    mockApi = {
-      logger: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      pluginConfig: pluginConfig.pluginConfig,
-      registerTool: vi.fn(),
-      registerService: vi.fn(),
-      registerHttpRoute: vi.fn(),
-      on: vi.fn(),
-    };
-  });
-
   describe("config schema", () => {
-    it("should have required fields defined", async () => {
-      // Import the plugin module to get the config schema
+    it("should have a TypeBox config schema", async () => {
       const pluginModule = await import("../index.js");
       const defaultExport = pluginModule.default;
 
@@ -99,6 +69,28 @@ describe("Plugin Entry", () => {
       expect(props).toHaveProperty("clawDescription");
       expect(props).toHaveProperty("autoReconnect");
       expect(props).toHaveProperty("reconnectInterval");
+    });
+
+    it("should validate config with busUrl via TypeBox Value", async () => {
+      const pluginModule = await import("../index.js");
+      const defaultExport = pluginModule.default;
+      const schema = defaultExport.configSchema;
+
+      const ok = Value.Check(schema, {
+        busUrl: "http://localhost:8080",
+        clawName: "test-claw",
+      });
+      expect(ok).toBe(true);
+    });
+
+    it("should reject invalid config types", async () => {
+      const pluginModule = await import("../index.js");
+      const defaultExport = pluginModule.default;
+      const schema = defaultExport.configSchema;
+
+      expect(Value.Check(schema, null)).toBe(false);
+      expect(Value.Check(schema, "string")).toBe(false);
+      expect(Value.Check(schema, [1, 2, 3])).toBe(false);
     });
   });
 
@@ -150,5 +142,20 @@ describe("Config Schema Properties", () => {
     expect(props).toHaveProperty("clawName");
     expect(props).toHaveProperty("autoReconnect");
     expect(props).toHaveProperty("reconnectInterval");
+  });
+});
+
+describe("Config UI Hints", () => {
+  it("should have uiHints for key options in openclaw.plugin.json", () => {
+    const { uiHints } = manifest;
+    expect(uiHints).toBeDefined();
+    expect(uiHints.busUrl).toHaveProperty("label");
+    expect(uiHints.clawName).toHaveProperty("label");
+    expect(uiHints.clawDescription).toHaveProperty("label");
+    expect(uiHints.capabilityOffer).toHaveProperty("label");
+    expect(uiHints.domainInterests).toHaveProperty("label");
+    expect(uiHints.factTypePatterns).toHaveProperty("label");
+    expect(uiHints.semanticKinds).toHaveProperty("label");
+    expect(uiHints.subjectKeyPatterns).toHaveProperty("label");
   });
 });

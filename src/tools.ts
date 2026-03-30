@@ -5,7 +5,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { FactBusClient } from "./api.js";
-import { pendingEvents } from "./pending-events.js";
+import {
+  pendingEvents,
+  consumeDroppedPendingCount,
+} from "./pending-events.js";
 import type {
   PublishFactParams,
   QueryFactsToolParams,
@@ -97,7 +100,7 @@ function factSummaryForSense(f: Fact) {
 export const senseFactTool = {
   name: "fact_bus_sense",
   description:
-    "Check for new facts pushed from the Fact Bus (WebSocket). Call this periodically to sense what is happening on the bus. Returns drained pending events with facts and action guidance (what to do next).",
+    "Check for new facts pushed from the Fact Bus (WebSocket). Call this periodically to sense what is happening on the bus. Returns drained pending events with facts and action guidance (what to do next). If events_dropped > 0, events were lost due to queue overflow; use fact_bus_query to catch up.",
   parameters: Type.Object({
     limit: Type.Optional(
       Type.Number({
@@ -116,6 +119,7 @@ export const senseFactTool = {
     const { logger } = context;
     const limit = params.limit ?? 10;
     const drained = pendingEvents.splice(0, limit);
+    const eventsDropped = consumeDroppedPendingCount();
 
     if (drained.length === 0) {
       return {
@@ -125,8 +129,11 @@ export const senseFactTool = {
             text: JSON.stringify(
               {
                 count: 0,
+                events_dropped: eventsDropped,
                 message:
-                  "No pending bus events. Events arrive via WebSocket; call again after activity or use fact_bus_query to poll.",
+                  eventsDropped > 0
+                    ? `No events in queue, but ${eventsDropped} event(s) were dropped earlier due to overflow; use fact_bus_query to poll.`
+                    : "No pending bus events. Events arrive via WebSocket; call again after activity or use fact_bus_query to poll.",
               },
               null,
               2
@@ -188,7 +195,15 @@ export const senseFactTool = {
       content: [
         {
           type: "text",
-          text: JSON.stringify({ count: items.length, events: items }, null, 2),
+          text: JSON.stringify(
+            {
+              count: items.length,
+              events_dropped: eventsDropped,
+              events: items,
+            },
+            null,
+            2
+          ),
         },
       ],
       details: {},
@@ -251,7 +266,7 @@ export const publishFactTool = {
       Type.Number({
         minimum: 0,
         maximum: 1,
-        description: "Publisher's confidence in this fact 0-1 (default: 1.0)",
+        description: "Publisher's confidence 0–1; omit if unspecified",
       })
     ),
     ttl_seconds: Type.Optional(
@@ -321,6 +336,7 @@ export const publishFactTool = {
       ttl_seconds: params.ttl_seconds,
       domain_tags: params.domain_tags,
       need_capabilities: params.need_capabilities,
+      parent_fact_id: params.parent_fact_id,
       causation_chain,
       causation_depth,
     });
