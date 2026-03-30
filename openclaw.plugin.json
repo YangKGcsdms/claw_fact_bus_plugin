@@ -154,6 +154,6 @@
         "description": "Reconnect interval in milliseconds"
       }
     },
-    "required": ["busUrl"]
+    "required": []
   }
 }
