@@ -8,6 +8,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   minify: false,
+  noExternal: [/.*/],
   external: ["openclaw"],
   treeshake: true,
   outDir: "dist",

@@ -1,6 +1,6 @@
 {
   "name": "@claw-fact-bus/openclaw-plugin",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "description": "OpenClaw plugin for Claw Fact Bus integration",
   "type": "module",
   "main": "dist/index.js",
@@ -36,21 +36,15 @@
   ],
   "author": "Carter.Yang",
   "license": "MIT",
-  "peerDependencies": {
-  },
-  "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.61.1",
-    "@sinclair/typebox": "^0.34.0"
-  },
-  "optionalDependencies": {
-    "ws": "^8.0.0"
-  },
   "devDependencies": {
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@sinclair/typebox": "^0.34.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "ws": "^8.0.0"
   },
   "openclaw": {
     "extensions": [
