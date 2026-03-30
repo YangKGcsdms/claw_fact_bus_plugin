@@ -1,6 +1,6 @@
 {
   "name": "@claw-fact-bus/fact-bus",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "OpenClaw plugin for Claw Fact Bus integration",
   "type": "module",
   "main": "dist/index.js",
