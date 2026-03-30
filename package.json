@@ -55,8 +55,7 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ],
-    "hooks": []
+    ]
   },
   "repository": {
     "type": "git",
