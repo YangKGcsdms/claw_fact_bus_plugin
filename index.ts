@@ -53,9 +53,37 @@ let wsServiceClawId: string | null = null;
 
 const STARTUP_CONNECT_MAX_ATTEMPTS = 30;
 const STARTUP_CONNECT_BASE_DELAY_MS = 2000;
+/** After a subagent run finishes, ignore duplicate fact_available for this long (reconnect / replay). */
+const DEDUP_COOLDOWN_MS = 5 * 60 * 1000;
+const SUBAGENT_TIMEOUT_MS = 300_000;
+
+/** Concurrent auto-processing runs (bounded by maxConcurrentSubagents). */
+let activeSubagentRuns = 0;
+/** Fact IDs currently being processed by a subagent. */
+const inFlightFactIds = new Set<string>();
+/** fact_id → expiry time for post-completion dedup window. */
+const cooldownUntil = new Map<string, number>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pruneCooldown(): void {
+  const now = Date.now();
+  for (const [id, until] of cooldownUntil) {
+    if (now >= until) {
+      cooldownUntil.delete(id);
+    }
+  }
+}
+
+function shouldSkipDuplicateSpawn(factId: string): boolean {
+  pruneCooldown();
+  if (inFlightFactIds.has(factId)) {
+    return true;
+  }
+  const until = cooldownUntil.get(factId);
+  return until !== undefined && Date.now() < until;
 }
 
 export default definePluginEntry({
@@ -97,13 +125,16 @@ export default definePluginEntry({
     reconnectInterval: Type.Optional(Type.Number({ default: 5000 })),
     /** Enable auto-processing: spawn subagent when facts arrive */
     autoProcess: Type.Optional(Type.Boolean({ default: true })),
+    maxConcurrentSubagents: Type.Optional(
+      Type.Number({ default: 3, minimum: 1, maximum: 100 })
+    ),
   }) as unknown as OpenClawPluginConfigSchema,
 
   register(api) {
     // Store runtime reference for subagent spawning
     pluginApi = api;
 
-    const config = api.pluginConfig as unknown as FactBusPluginConfig & { autoProcess?: boolean };
+    const config = api.pluginConfig as unknown as FactBusPluginConfig;
     const logger = wrapPluginLogger(api.logger);
 
     // Initialize client
@@ -188,6 +219,7 @@ export default definePluginEntry({
           websocket: wsService?.isConnected ?? false,
           clawId: client?.currentClawId,
           websocketClawId: wsServiceClawId,
+          activeSubagentRuns,
         };
         sendJson(res, health);
       },
@@ -293,11 +325,29 @@ async function spawnFactProcessor(
   config: FactBusPluginConfig,
   logger: ToolContext["logger"]
 ): Promise<void> {
+  const maxConcurrent = config.maxConcurrentSubagents ?? 3;
+
+  if (activeSubagentRuns >= maxConcurrent) {
+    logger.info(
+      `Auto-process at capacity (${activeSubagentRuns}/${maxConcurrent}); queueing fact ${fact.fact_id}`
+    );
+    pushPendingEvent({ event_type: "fact_available", fact, timestamp: Date.now() });
+    return;
+  }
+
+  if (shouldSkipDuplicateSpawn(fact.fact_id)) {
+    logger.debug(`Skipping duplicate fact_available for ${fact.fact_id} (in flight or cooldown)`);
+    return;
+  }
+
   if (!pluginApi?.runtime?.subagent?.run) {
     logger.warn("Cannot auto-process fact: subagent runtime not available");
     pushPendingEvent({ event_type: "fact_available", fact, timestamp: Date.now() });
     return;
   }
+
+  inFlightFactIds.add(fact.fact_id);
+  activeSubagentRuns++;
 
   const sessionKey = `fact-bus:fact:${fact.fact_id}`;
   const factJson = JSON.stringify(fact, null, 2);
@@ -326,19 +376,16 @@ ${actionGuidance}
 ## Instructions
 
 1. **If this is an EXCLUSIVE fact you can handle**: 
-   - Call \\\`fact_bus_claim\\\` with fact_id "${fact.fact_id}"
+   - Call \`fact_bus_claim\` with fact_id "${fact.fact_id}"
    - If claim succeeds, process the task described in the payload
-   - Call \\\`fact_bus_resolve\\\` with your results
+   - Call \`fact_bus_resolve\` with your results
 
 2. **If this is a BROADCAST fact relevant to you**:
    - Process it immediately (no claim needed)
-   - Optionally publish child facts using \\\`fact_bus_publish\\\`
+   - Optionally publish child facts using \`fact_bus_publish\`
 
 3. **If you cannot handle this fact**:
    - Simply acknowledge and end the session
-
-4. **After processing**:
-   - Call \\\`fact_bus_sense\\\` to check for more pending facts
 
 Start by claiming (if exclusive) or processing (if broadcast) the fact above.`;
 
@@ -353,19 +400,31 @@ Start by claiming (if exclusive) or processing (if broadcast) the fact above.`;
 
     logger.info(`Subagent spawned for fact ${fact.fact_id}, runId: ${runId}`);
 
-    // Optionally wait for completion and log result
     // Note: We don't await here to avoid blocking the event handler
     void (async () => {
       try {
-        await pluginApi!.runtime.subagent.waitForRun({ runId, timeoutMs: 300000 }); // 5 min timeout
+        await pluginApi!.runtime.subagent.waitForRun({
+          runId,
+          timeoutMs: SUBAGENT_TIMEOUT_MS,
+        });
         logger.info(`Subagent completed for fact ${fact.fact_id}`);
       } catch (err) {
         logger.warn(`Subagent timed out or failed for fact ${fact.fact_id}:`, err);
+        try {
+          await client?.releaseFact(fact.fact_id);
+        } catch (releaseErr) {
+          logger.warn(`releaseFact failed for ${fact.fact_id} after subagent failure:`, releaseErr);
+        }
+      } finally {
+        inFlightFactIds.delete(fact.fact_id);
+        cooldownUntil.set(fact.fact_id, Date.now() + DEDUP_COOLDOWN_MS);
+        activeSubagentRuns--;
       }
     })();
   } catch (err) {
     logger.error(`Failed to spawn subagent for fact ${fact.fact_id}:`, err);
-    // Fallback: push to pending queue for manual processing
+    inFlightFactIds.delete(fact.fact_id);
+    activeSubagentRuns--;
     pushPendingEvent({ event_type: "fact_available", fact, timestamp: Date.now() });
   }
 }
@@ -424,6 +483,12 @@ function handleWebSocketEvent(
       const fact = event.fact;
       logger.info(`Fact available: ${fact?.fact_type} (mode: ${fact?.mode})`);
 
+      // Do not process or queue facts we published (avoids auto-loop on child facts)
+      if (fact && client?.currentClawId && fact.source_claw_id === client.currentClawId) {
+        logger.debug(`Ignoring self-originated fact (echo): ${fact.fact_id}`);
+        break;
+      }
+
       if (autoProcess && fact && shouldAutoProcess(fact, config)) {
         // Spawn subagent to handle this fact immediately (Channel-like behavior)
         void spawnFactProcessor(fact, config, logger);
@@ -473,6 +538,11 @@ function handleWebSocketEvent(
  * Determine if a fact should be auto-processed based on config filters.
  */
 function shouldAutoProcess(fact: Fact, config: FactBusPluginConfig): boolean {
+  // Never auto-process facts we originated (defense in depth; handleWebSocketEvent also skips)
+  if (client?.currentClawId && fact.source_claw_id === client.currentClawId) {
+    return false;
+  }
+
   // Check domain interests
   if (config.domainInterests && config.domainInterests.length > 0) {
     const hasDomainMatch = fact.domain_tags?.some((tag) =>

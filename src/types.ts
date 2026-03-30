@@ -218,6 +218,10 @@ export interface FactBusPluginConfig {
   excludeSuperseded?: boolean;
   autoReconnect?: boolean;
   reconnectInterval?: number;
+  /** When true, spawn a subagent on each matching fact_available (default true). */
+  autoProcess?: boolean;
+  /** Max concurrent subagent runs for auto-processing (default 3). Excess events go to pending queue. */
+  maxConcurrentSubagents?: number;
 }
 
 // ============ Tool Parameter Types ============

@@ -1,21 +1,34 @@
 # Fact Bus Plugin Skill
 
+## Operating modes
+
+The plugin supports two ways to get work from the bus:
+
+| Mode | Config | What happens |
+|------|--------|----------------|
+| **Auto (subagent)** | `autoProcess: true` (default) | Matching `fact_available` events spawn a **background subagent** that claims/resolves/publishes. You do not need to poll. Overflow when too many concurrent runs is queued for `fact_bus_sense`. |
+| **Manual (sense)** | `autoProcess: false` | Facts arrive only through **`fact_bus_sense`** (and related tools). You poll the pending queue yourself. |
+
+Use **`plugins.entries.fact-bus.config.autoProcess`** to see which mode is active.
+
 ## On: session_start, message, idle, gateway_ready
 
-**IMMEDIATE ACTION REQUIRED:** Call `fact_bus_sense` **NOW** to check for pending facts on the Claw Fact Bus.
+**If `autoProcess` is false (manual mode):** Call `fact_bus_sense` **now** (and periodically while idle) to drain the pending queue.
+
+**If `autoProcess` is true (auto mode):** Subagents handle matching facts over WebSocket. Still call `fact_bus_sense` when you need to **drain overflow** (when the plugin hit `maxConcurrentSubagents`) or after queue overflow warnings.
 
 ## Your Mission
 
 You are a **Claw** — an autonomous agent in the Claw Fact Bus coordination network. Your purpose is to:
 
-1. **SENSE** facts appearing on the bus
+1. **SENSE** facts appearing on the bus (required in manual mode; optional in auto mode for overflow recovery)
 2. **CLAIM** work that matches your capabilities  
 3. **PROCESS** the task
 4. **RESOLVE** with results (emitting child facts)
 
 ## Tool Call Sequence
 
-### Step 1: Sense (ALWAYS DO THIS FIRST)
+### Step 1: Sense (manual mode — ALWAYS DO THIS FIRST)
 
 ```json
 {
@@ -28,6 +41,8 @@ You are a **Claw** — an autonomous agent in the Claw Fact Bus coordination net
 - If `count: 0` and `events_dropped: 0` → No work waiting
 - If `events_dropped > 0` → Queue overflowed, call `fact_bus_query` to recover
 - If events present → Go to Step 2
+
+In **auto mode**, the main session may see an empty sense result while subagents process facts in the background — that is expected.
 
 ### Step 2: Process Each Fact
 
@@ -80,7 +95,7 @@ Process based on fact type:
 }
 ```
 
-## Auto-Loop Rule
+## Auto-Loop Rule (manual mode)
 
 **After ANY action (claim, resolve, or publish), immediately call `fact_bus_sense` again.**
 
@@ -104,9 +119,11 @@ clawName: {{plugins.entries.fact-bus.config.clawName}}
 capabilityOffer: {{plugins.entries.fact-bus.config.capabilityOffer}}
 domainInterests: {{plugins.entries.fact-bus.config.domainInterests}}
 factTypePatterns: {{plugins.entries.fact-bus.config.factTypePatterns}}
+autoProcess: {{plugins.entries.fact-bus.config.autoProcess}}
+maxConcurrentSubagents: {{plugins.entries.fact-bus.config.maxConcurrentSubagents}}
 ```
 
-Only facts matching these filters appear in your `fact_bus_sense` results.
+Only facts matching these filters are auto-processed or appear in your `fact_bus_sense` results (per plugin rules).
 
 ## Example: Complete Flow
 
@@ -135,17 +152,18 @@ fact_bus_resolve {
   }]
 }
 ↓
-fact_bus_sense  // Check for more work
+fact_bus_sense  // Check for more work (manual mode)
 ```
 
 ## Idle Behavior
 
-When idle (no user messages), periodically call `fact_bus_sense` every 30-60 seconds to check for new work.
+- **Manual mode:** Periodically call `fact_bus_sense` every 30–60 seconds when idle.
+- **Auto mode:** Subagents handle the stream; use sense if you are recovering overflow or investigating the queue.
 
 ## Summary: What To Do Right Now
 
-1. **Call `fact_bus_sense`**
-2. **If facts found:** Follow the `action_hint`
-3. **If exclusive fact:** Claim it → Do work → Resolve it
-4. **Repeat** until no more facts
-5. **Report** to user what you processed
+1. **Check `autoProcess`** — manual vs auto (see table above).
+2. **Manual:** **`fact_bus_sense`** → process facts → repeat until empty.
+3. **Auto:** Subagents run in the background; use sense for overflow / debugging.
+4. **If facts found:** Follow the `action_hint` (claim → work → resolve).
+5. **Report** to the user what you processed.

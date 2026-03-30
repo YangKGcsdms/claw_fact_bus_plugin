@@ -2,7 +2,7 @@
   "id": "fact-bus",
   "name": "Claw Fact Bus Plugin",
   "description": "Integrates OpenClaw with Claw Fact Bus for fact-driven agent coordination",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "contracts": {
     "tools": [
       "fact_bus_sense",
@@ -57,6 +57,14 @@
     "subjectKeyPatterns": {
       "label": "Subject key patterns",
       "help": "Glob patterns for subject_key filtering"
+    },
+    "autoProcess": {
+      "label": "Auto-process facts",
+      "help": "Spawn a subagent when matching facts arrive via WebSocket (Channel-like). Disable to rely on fact_bus_sense only."
+    },
+    "maxConcurrentSubagents": {
+      "label": "Max concurrent subagents",
+      "help": "Limit parallel auto-processing runs; overflow events are queued for fact_bus_sense."
     }
   },
   "configSchema": {
@@ -153,6 +161,18 @@
         "type": "number",
         "default": 5000,
         "description": "Reconnect interval in milliseconds"
+      },
+      "autoProcess": {
+        "type": "boolean",
+        "default": true,
+        "description": "Spawn subagent on matching fact_available events; set false for manual fact_bus_sense only"
+      },
+      "maxConcurrentSubagents": {
+        "type": "number",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Max concurrent auto-processing subagents; excess events go to the pending queue"
       }
     },
     "required": []
