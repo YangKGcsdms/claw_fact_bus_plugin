@@ -1,10 +1,14 @@
 /**
  * Claw Fact Bus OpenClaw Plugin Entry Point
+ *
+ * Architecture: When a fact arrives via WebSocket, we spawn a subagent
+ * to process it autonomously (like a Channel plugin triggering on message).
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawPluginConfigSchema,
+  OpenClawPluginApi,
   PluginLogger,
 } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
@@ -13,7 +17,10 @@ import { FactBusClient } from "./src/api.js";
 import { factBusTools, type ToolContext } from "./src/tools.js";
 import { FactBusWebSocketService } from "./src/websocket.js";
 import { MAX_PENDING, pushPendingEvent } from "./src/pending-events.js";
-import type { FactBusPluginConfig, BusEvent } from "./src/types.js";
+import type { FactBusPluginConfig, BusEvent, Fact } from "./src/types.js";
+
+// Runtime reference for spawning subagents
+let pluginApi: OpenClawPluginApi | null = null;
 
 function wrapPluginLogger(log: PluginLogger): ToolContext["logger"] {
   const join = (args: unknown[]) =>
@@ -42,7 +49,6 @@ function sendJson(res: ServerResponse, body: unknown): void {
 // Plugin-level state
 let client: FactBusClient | null = null;
 let wsService: FactBusWebSocketService | null = null;
-/** claw_id the current WebSocket subscription was opened for (if any). */
 let wsServiceClawId: string | null = null;
 
 const STARTUP_CONNECT_MAX_ATTEMPTS = 30;
@@ -89,10 +95,15 @@ export default definePluginEntry({
     excludeSuperseded: Type.Optional(Type.Boolean({ default: true })),
     autoReconnect: Type.Optional(Type.Boolean({ default: true })),
     reconnectInterval: Type.Optional(Type.Number({ default: 5000 })),
+    /** Enable auto-processing: spawn subagent when facts arrive */
+    autoProcess: Type.Optional(Type.Boolean({ default: true })),
   }) as unknown as OpenClawPluginConfigSchema,
 
   register(api) {
-    const config = api.pluginConfig as unknown as FactBusPluginConfig;
+    // Store runtime reference for subagent spawning
+    pluginApi = api;
+
+    const config = api.pluginConfig as unknown as FactBusPluginConfig & { autoProcess?: boolean };
     const logger = wrapPluginLogger(api.logger);
 
     // Initialize client
@@ -103,7 +114,7 @@ export default definePluginEntry({
       logger,
     };
 
-    // Register all tools
+    // Register all tools (for manual use and subagent access)
     for (const tool of factBusTools) {
       api.registerTool(
         {
@@ -112,7 +123,6 @@ export default definePluginEntry({
           description: tool.description,
           parameters: tool.parameters,
           execute: async (id, params) => {
-            // Ensure connected before tool execution
             if (!client?.isConnected) {
               await connectToBus(config, logger);
             }
@@ -123,14 +133,14 @@ export default definePluginEntry({
       );
     }
 
-    // Register lifecycle hooks — connect in background so gateway is not blocked if bus starts late
+    // Register lifecycle hooks
     api.on("gateway_start", () => {
       toolContext.logger.info("Gateway starting; Fact Bus connect will run in background...");
       void (async () => {
         for (let attempt = 1; attempt <= STARTUP_CONNECT_MAX_ATTEMPTS; attempt++) {
           try {
             await connectToBus(config, toolContext.logger);
-            ensureWebSocketAfterConnect(config, toolContext.logger);
+            ensureWebSocketAfterConnect(config, toolContext.logger, config.autoProcess ?? true);
             toolContext.logger.info("Fact Bus connected and WebSocket ensured.");
             return;
           } catch (error) {
@@ -221,19 +231,15 @@ async function connectToBus(
   logger.info(`Connected to Fact Bus as claw: ${response.claw_id}`);
 }
 
-/**
- * (Re)start WebSocket when HTTP session is new or claw_id changed, or WS is down.
- */
 function ensureWebSocketAfterConnect(
   config: FactBusPluginConfig,
-  logger: ToolContext["logger"]
+  logger: ToolContext["logger"],
+  autoProcess = true
 ): void {
   if (!client?.isConnected || !client.currentClawId) {
     return;
   }
   const cid = client.currentClawId;
-  // Only restart when there is no WS service or the HTTP session claw_id changed.
-  // Do not key off isConnected — the WebSocket layer handles reconnect/backoff itself.
   const needsRestart = !wsService || wsServiceClawId !== cid;
   if (!needsRestart) {
     return;
@@ -242,12 +248,13 @@ function ensureWebSocketAfterConnect(
     `Fact Bus WebSocket: (re)starting for claw ${cid}${wsServiceClawId && wsServiceClawId !== cid ? ` (was ${wsServiceClawId})` : ""}`
   );
   stopWebSocketService();
-  startWebSocketService(config, logger);
+  startWebSocketService(config, logger, autoProcess);
 }
 
 function startWebSocketService(
   config: FactBusPluginConfig,
-  logger: ToolContext["logger"]
+  logger: ToolContext["logger"],
+  autoProcess = true
 ): void {
   if (!client || !client.isConnected || !client.currentClawId) {
     logger.warn("Cannot start WebSocket: client not connected");
@@ -261,7 +268,7 @@ function startWebSocketService(
     config,
     logger,
     onEvent: (event: BusEvent) => {
-      handleWebSocketEvent(event, logger);
+      handleWebSocketEvent(event, logger, config, autoProcess);
     },
   });
 
@@ -277,15 +284,135 @@ function stopWebSocketService(): void {
   wsServiceClawId = null;
 }
 
+/**
+ * Spawn a subagent to autonomously process a fact.
+ * This mimics Channel behavior: event arrives → AI responds.
+ */
+async function spawnFactProcessor(
+  fact: Fact,
+  config: FactBusPluginConfig,
+  logger: ToolContext["logger"]
+): Promise<void> {
+  if (!pluginApi?.runtime?.subagent?.run) {
+    logger.warn("Cannot auto-process fact: subagent runtime not available");
+    pushPendingEvent({ event_type: "fact_available", fact, timestamp: Date.now() });
+    return;
+  }
+
+  const sessionKey = `fact-bus:fact:${fact.fact_id}`;
+  const factJson = JSON.stringify(fact, null, 2);
+
+  // Determine action based on fact mode and semantic kind
+  const actionGuidance = getActionGuidance(fact);
+
+  const prompt = `A new fact has arrived on the Claw Fact Bus that requires your attention.
+
+## Fact Details
+
+\`\`\`json
+${factJson}
+\`\`\`
+
+## Your Configuration
+
+- **clawName**: ${config.clawName ?? "openclaw-agent"}
+- **capabilityOffer**: ${JSON.stringify(config.capabilityOffer ?? [])}
+- **domainInterests**: ${JSON.stringify(config.domainInterests ?? [])}
+
+## Action Required
+
+${actionGuidance}
+
+## Instructions
+
+1. **If this is an EXCLUSIVE fact you can handle**: 
+   - Call \\\`fact_bus_claim\\\` with fact_id "${fact.fact_id}"
+   - If claim succeeds, process the task described in the payload
+   - Call \\\`fact_bus_resolve\\\` with your results
+
+2. **If this is a BROADCAST fact relevant to you**:
+   - Process it immediately (no claim needed)
+   - Optionally publish child facts using \\\`fact_bus_publish\\\`
+
+3. **If you cannot handle this fact**:
+   - Simply acknowledge and end the session
+
+4. **After processing**:
+   - Call \\\`fact_bus_sense\\\` to check for more pending facts
+
+Start by claiming (if exclusive) or processing (if broadcast) the fact above.`;
+
+  logger.info(`Spawning subagent for fact ${fact.fact_id} (${fact.fact_type})`);
+
+  try {
+    const { runId } = await pluginApi.runtime.subagent.run({
+      sessionKey,
+      message: prompt,
+      deliver: false, // Don't deliver to user, run in background
+    });
+
+    logger.info(`Subagent spawned for fact ${fact.fact_id}, runId: ${runId}`);
+
+    // Optionally wait for completion and log result
+    // Note: We don't await here to avoid blocking the event handler
+    void (async () => {
+      try {
+        await pluginApi!.runtime.subagent.waitForRun({ runId, timeoutMs: 300000 }); // 5 min timeout
+        logger.info(`Subagent completed for fact ${fact.fact_id}`);
+      } catch (err) {
+        logger.warn(`Subagent timed out or failed for fact ${fact.fact_id}:`, err);
+      }
+    })();
+  } catch (err) {
+    logger.error(`Failed to spawn subagent for fact ${fact.fact_id}:`, err);
+    // Fallback: push to pending queue for manual processing
+    pushPendingEvent({ event_type: "fact_available", fact, timestamp: Date.now() });
+  }
+}
+
+function getActionGuidance(fact: Fact): string {
+  const { mode, semantic_kind, fact_type, payload } = fact;
+
+  if (mode === "exclusive") {
+    return `This is an **EXCLUSIVE** fact (mode: exclusive). 
+Only one agent can process it. You should:
+1. Check if the fact_type "${fact_type}" matches your capabilities
+2. If yes, claim it immediately with fact_bus_claim
+3. Process the payload: ${JSON.stringify(payload)}
+4. Resolve with results using fact_bus_resolve`;
+  }
+
+  // Broadcast mode
+  switch (semantic_kind) {
+    case "request":
+      return `This is a **REQUEST** (broadcast). Consider if you can fulfill this request.
+If yes, you may claim it (if it becomes exclusive) or publish a helpful response fact.
+Payload: ${JSON.stringify(payload)}`;
+    case "observation":
+      return `This is an **OBSERVATION** (broadcast). Acknowledge and react if relevant to your domain.
+You may publish child facts if you have insights.
+Payload: ${JSON.stringify(payload)}`;
+    case "assertion":
+      return `This is an **ASSERTION** (broadcast). You may validate it (corroborate/contradict) if you have evidence.
+Payload: ${JSON.stringify(payload)}`;
+    default:
+      return `This is a **${semantic_kind?.toUpperCase() || "UNKNOWN"}** fact (broadcast).
+Review and react appropriately. Payload: ${JSON.stringify(payload)}`;
+  }
+}
+
 function handleWebSocketEvent(
   event: BusEvent,
-  logger: ToolContext["logger"]
+  logger: ToolContext["logger"],
+  config: FactBusPluginConfig,
+  autoProcess = true
 ): void {
   const ev = event as unknown as {
     event_type: string;
-    fact?: { fact_id?: string; fact_type?: string };
+    fact?: Fact;
     detail?: unknown;
   };
+
   const onOverflow = (dropped: number) => {
     logger.warn(
       `Fact Bus pending queue overflow: dropped ${dropped} oldest event(s); cap=${MAX_PENDING}. Use fact_bus_query if needed.`
@@ -293,10 +420,19 @@ function handleWebSocketEvent(
   };
 
   switch (ev.event_type) {
-    case "fact_available":
-      logger.info(`Fact available: ${event.fact?.fact_type}`);
-      pushPendingEvent(event, onOverflow);
+    case "fact_available": {
+      const fact = event.fact;
+      logger.info(`Fact available: ${fact?.fact_type} (mode: ${fact?.mode})`);
+
+      if (autoProcess && fact && shouldAutoProcess(fact, config)) {
+        // Spawn subagent to handle this fact immediately (Channel-like behavior)
+        void spawnFactProcessor(fact, config, logger);
+      } else {
+        // Fallback: push to pending queue for manual fact_bus_sense
+        pushPendingEvent(event, onOverflow);
+      }
       break;
+    }
 
     case "fact_claimed":
       logger.debug(`Fact claimed: ${ev.fact?.fact_id}`);
@@ -331,4 +467,46 @@ function handleWebSocketEvent(
     default:
       logger.debug(`WebSocket event: ${ev.event_type}`);
   }
+}
+
+/**
+ * Determine if a fact should be auto-processed based on config filters.
+ */
+function shouldAutoProcess(fact: Fact, config: FactBusPluginConfig): boolean {
+  // Check domain interests
+  if (config.domainInterests && config.domainInterests.length > 0) {
+    const hasDomainMatch = fact.domain_tags?.some((tag) =>
+      config.domainInterests!.includes(tag)
+    );
+    if (!hasDomainMatch) return false;
+  }
+
+  // Check fact type patterns
+  if (config.factTypePatterns && config.factTypePatterns.length > 0) {
+    const matchesPattern = config.factTypePatterns.some((pattern) =>
+      matchGlob(fact.fact_type, pattern)
+    );
+    if (!matchesPattern) return false;
+  }
+
+  // Check capability requirements
+  if (fact.need_capabilities && fact.need_capabilities.length > 0) {
+    const hasCapability = config.capabilityOffer?.some((cap) =>
+      fact.need_capabilities!.includes(cap)
+    );
+    // If fact requires capabilities we don't have, don't auto-process
+    if (!hasCapability && fact.mode === "exclusive") return false;
+  }
+
+  return true;
+}
+
+/**
+ * Simple glob matching for fact type patterns.
+ */
+function matchGlob(value: string, pattern: string): boolean {
+  const regex = new RegExp(
+    "^" + pattern.replace(/\./g, "\\.").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
+  );
+  return regex.test(value);
 }
