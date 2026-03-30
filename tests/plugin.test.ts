@@ -45,9 +45,30 @@ describe("Plugin Entry", () => {
       const pluginModule = await import("../index.js");
       const defaultExport = pluginModule.default;
 
+      // Check that the plugin has configSchema (TypeBox schema)
       expect(defaultExport).toHaveProperty("configSchema");
-      const schema = defaultExport.configSchema as { type?: string };
-      expect(schema.type === "object" || typeof schema === "object").toBe(true);
+      expect(defaultExport.configSchema).toHaveProperty("type");
+      expect(defaultExport.configSchema.type).toBe("object");
+    });
+
+    it("should have busUrl as required field", async () => {
+      const pluginModule = await import("../index.js");
+      const defaultExport = pluginModule.default;
+
+      // TypeBox schema should have busUrl in required properties
+      expect(defaultExport.configSchema.required).toContain("busUrl");
+    });
+
+    it("should have correct config structure", async () => {
+      const pluginModule = await import("../index.js");
+      const defaultExport = pluginModule.default;
+
+      const props = defaultExport.configSchema.properties;
+      expect(props).toHaveProperty("busUrl");
+      expect(props).toHaveProperty("clawName");
+      expect(props).toHaveProperty("clawDescription");
+      expect(props).toHaveProperty("autoReconnect");
+      expect(props).toHaveProperty("reconnectInterval");
     });
 
     it("should validate config with busUrl via TypeBox Value", async () => {
@@ -104,6 +125,23 @@ describe("Plugin Entry", () => {
 
       expect(typeof defaultExport.register).toBe("function");
     });
+  });
+});
+
+describe("Config Schema Properties", () => {
+  it("should have optional properties correctly defined", async () => {
+    const pluginModule = await import("../index.js");
+    const defaultExport = pluginModule.default;
+
+    const props = defaultExport.configSchema.properties;
+    // Optional properties should not be in required array
+    expect(defaultExport.configSchema.required).not.toContain("clawName");
+    expect(defaultExport.configSchema.required).not.toContain("autoReconnect");
+    
+    // But should exist in properties
+    expect(props).toHaveProperty("clawName");
+    expect(props).toHaveProperty("autoReconnect");
+    expect(props).toHaveProperty("reconnectInterval");
   });
 });
 

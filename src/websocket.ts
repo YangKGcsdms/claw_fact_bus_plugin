@@ -166,7 +166,7 @@ export class FactBusWebSocketService {
     try {
       const wsModule = await import("ws");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return wsModule.default || (wsModule as any).WebSocket;
+      return (wsModule.default || (wsModule as any).WebSocket) as any;
     } catch {
       throw new Error(
         "WebSocket is not available. Please install 'ws' package: npm install ws"
